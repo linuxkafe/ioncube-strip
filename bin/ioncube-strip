@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+# ioncube-strip — Offline ionCube 5.x literal pool extractor
+# SPDX-License-Identifier: MIT
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${SCRIPT_DIR}/../lib"
+CONFIG_DIR="${SCRIPT_DIR}/../config"
+
+DEFAULT_CONFIG="${CONFIG_DIR}/ioncube-strip.yaml.example"
+
+# Load configuration
+load_config() {
+    local config_file="$1"
+    if [[ -f "$config_file" ]]; then
+        # Simple YAML parsing for required values
+        # For complex parsing, we delegate to Python scripts
+        echo "$config_file"
+    else
+        echo "$DEFAULT_CONFIG"
+    fi
+}
+
+# Resolve toolchain paths from config + env
+resolve_toolchain() {
+    local config_file="$1"
+    PHP56="${PHP56:-}"
+    PHP56_INI="${PHP56_INI:-}"
+    ARM56_SO="${ARM56_SO:-}"
+    ARM56_TMP="${ARM56_TMP:-}"
+
+    if [[ -f "$config_file" ]]; then
+        # Use Python to parse YAML and export vars
+        eval "$(python3 -c "
+import yaml, sys
+with open('$config_file') as f:
+    cfg = yaml.safe_load(f)
+tc = cfg.get('toolchain', {})
+for k, v in tc.items():
+    if v:
+        print(f'{k.upper()}=\"{v}\"')
+")"
+    fi
+
+    # Env vars override config
+    PHP56="${PHP56:-/usr/local/bin/php5.6}"
+    PHP56_INI="${PHP56_INI:-/etc/php56/php.ini}"
+    ARM56_SO="${ARM56_SO:-/usr/local/lib/arm56.so}"
+    ARM56_TMP="${ARM56_TMP:-/tmp/arm56_output}"
+
+    export PHP56 PHP56_INI ARM56_SO ARM56_TMP
+}
+
+# Check toolchain availability
+check_toolchain() {
+    local missing=0
+    [[ -x "$PHP56" ]] || { echo "ERROR: PHP 5.6 not found at $PHP56" >&2; missing=1; }
+    [[ -f "$PHP56_INI" ]] || { echo "ERROR: PHP 5.6 ini not found at $PHP56_INI" >&2; missing=1; }
+    [[ -f "$ARM56_SO" ]] || { echo "ERROR: arm56.so not found at $ARM56_SO" >&2; missing=1; }
+    [[ -d "$ARM56_TMP" ]] || mkdir -p "$ARM56_TMP"
+    [[ -w "$ARM56_TMP" ]] || { echo "ERROR: arm56 tmp dir not writable: $ARM56_TMP" >&2; missing=1; }
+    [[ $missing -eq 0 ]] || exit 2
+}
+
+# Subcommand: scan
+cmd_scan() {
+    local source="" output="" config="" dry_run=0 verbose=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --source) source="$2"; shift 2;;
+            --output) output="$2"; shift 2;;
+            --config) config="$2"; shift 2;;
+            --dry-run) dry_run=1; shift;;
+            --verbose) verbose=1; shift;;
+            *) echo "Unknown option: $1" >&2; exit 1;;
+        esac
+    done
+
+    [[ -n "$source" ]] || { echo "ERROR: --source required" >&2; exit 1; }
+    [[ -d "$source" ]] || { echo "ERROR: Source not a directory: $source" >&2; exit 1; }
+
+    config="$(load_config "${config:-$DEFAULT_CONFIG}")"
+
+    if [[ $dry_run -eq 1 ]]; then
+        echo "[DRY-RUN] python3 $LIB_DIR/find_encrypted.py --config $config $source"
+        return 0
+    fi
+
+    python3 "$LIB_DIR/find_encrypted.py" --config "$config" "$source" \
+        | { [[ -n "$output" ]] && tee "$output" || cat; }
+}
+
+# Subcommand: dump
+cmd_dump() {
+    local source="" output="" config="" jobs=1 dry_run=0 verbose=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --source) source="$2"; shift 2;;
+            --output) output="$2"; shift 2;;
+            --config) config="$2"; shift 2;;
+            --jobs) jobs="$2"; shift 2;;
+            --dry-run) dry_run=1; shift;;
+            --verbose) verbose=1; shift;;
+            *) echo "Unknown option: $1" >&2; exit 1;;
+        esac
+    done
+
+    [[ -n "$source" ]] || { echo "ERROR: --source required" >&2; exit 1; }
+    [[ -n "$output" ]] || { echo "ERROR: --output required" >&2; exit 1; }
+    [[ -d "$source" ]] || { echo "ERROR: Source not a directory: $source" >&2; exit 1; }
+
+    config="$(load_config "${config:-$DEFAULT_CONFIG}")"
+    resolve_toolchain "$config"
+    check_toolchain
+
+    mkdir -p "$output/dumps"
+
+    # Get list of encrypted files
+    mapfile -t enc_files < <(python3 "$LIB_DIR/find_encrypted.py" --config "$config" "$source")
+
+    echo "Found ${#enc_files[@]} encrypted files"
+
+    if [[ ${#enc_files[@]} -eq 0 ]]; then
+        echo "No encrypted files to dump"
+        return 0
+    fi
+
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+
+    local i=0
+    for f in "${enc_files[@]}"; do
+        i=$((i + 1))
+        rel="${f#${source}/}"
+        echo "[$i/${#enc_files[@]}] Dumping $rel"
+
+        if [[ $dry_run -eq 1 ]]; then
+            echo "[DRY-RUN] $PHP56 -c $PHP56_INI -d extension=$ARM56_SO $LIB_DIR/dump_one.php $f"
+            echo "[DRY-RUN] python3 $LIB_DIR/collect_dumps.py --source $source --file $f --output $output --arm56-tmp $ARM56_TMP --config $config"
+            continue
+        fi
+
+        # Execute file under PHP 5.6 + arm56
+        "$PHP56" -c "$PHP56_INI" -d "extension=$ARM56_SO" "$LIB_DIR/dump_one.php" "$f" \
+            >/dev/null 2>>"$output/dump_errors.log" || {
+            echo "WARNING: Dump failed for $rel" >&2
+            continue
+        }
+
+        # Collect dumps
+        python3 "$LIB_DIR/collect_dumps.py" \
+            --source "$source" \
+            --file "$f" \
+            --output "$output" \
+            --arm56-tmp "$ARM56_TMP" \
+            --config "$config" || {
+            echo "WARNING: Collect failed for $rel" >&2
+        }
+    done
+
+    echo "Dump phase complete"
+}
+
+# Subcommand: pool
+cmd_pool() {
+    local dumps="" output="" config="" dry_run=0 verbose=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dumps) dumps="$2"; shift 2;;
+            --output) output="$2"; shift 2;;
+            --config) config="$2"; shift 2;;
+            --dry-run) dry_run=1; shift;;
+            --verbose) verbose=1; shift;;
+            *) echo "Unknown option: $1" >&2; exit 1;;
+        esac
+    done
+
+    [[ -n "$dumps" ]] || { echo "ERROR: --dumps required" >&2; exit 1; }
+    [[ -n "$output" ]] || { echo "ERROR: --output required" >&2; exit 1; }
+    [[ -d "$dumps" ]] || { echo "ERROR: Dumps directory not found: $dumps" >&2; exit 1; }
+
+    config="$(load_config "${config:-$DEFAULT_CONFIG}")"
+
+    if [[ $dry_run -eq 1 ]]; then
+        echo "[DRY-RUN] python3 $LIB_DIR/extract_pools.py --dumps $dumps --output $output --config $config"
+        return 0
+    fi
+
+    python3 "$LIB_DIR/extract_pools.py" --dumps "$dumps" --output "$output" --config "$config"
+}
+
+# Subcommand: run (full pipeline)
+cmd_run() {
+    local source="" output="" config="" jobs=1 dry_run=0 verbose=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --source) source="$2"; shift 2;;
+            --output) output="$2"; shift 2;;
+            --config) config="$2"; shift 2;;
+            --jobs) jobs="$2"; shift 2;;
+            --dry-run) dry_run=1; shift;;
+            --verbose) verbose=1; shift;;
+            *) echo "Unknown option: $1" >&2; exit 1;;
+        esac
+    done
+
+    [[ -n "$source" ]] || { echo "ERROR: --source required" >&2; exit 1; }
+    [[ -n "$output" ]] || { echo "ERROR: --output required" >&2; exit 1; }
+
+    cmd_scan --source "$source" --output "$output/scan.list" --config "$config" ${dry_run:+--dry-run} ${verbose:+--verbose}
+    cmd_dump --source "$source" --output "$output" --config "$config" --jobs "$jobs" ${dry_run:+--dry-run} ${verbose:+--verbose}
+    cmd_pool --dumps "$output/dumps" --output "$output" --config "$config" ${dry_run:+--dry-run} ${verbose:+--verbose}
+
+    echo "Pipeline complete. Pools in $output/pools/"
+}
+
+# Help
+show_help() {
+    cat <<EOF
+ioncube-strip v$VERSION — Offline ionCube 5.x literal pool extractor
+
+Usage: ioncube-strip <command> [options]
+
+Commands:
+  scan     Scan for ionCube-encrypted PHP files
+  dump     Execute encrypted files under PHP 5.6 + arm56 to produce dumps
+  pool     Extract literal pools from collected dumps
+  run      Run full pipeline (scan -> dump -> pool)
+
+Global Options:
+  --config FILE     Configuration file (default: config/ioncube-strip.yaml.example)
+  --dry-run         Show commands without executing
+  --verbose         Verbose output
+  --help            Show this help
+  --version         Show version
+
+Scan Options:
+  --source DIR      Source directory to scan (required)
+  --output FILE     Output file for list (default: stdout)
+
+Dump Options:
+  --source DIR      Source directory (required)
+  --output DIR      Output root directory (required)
+  --jobs N          Parallel dump jobs (default: 1, warning: shared tmp)
+
+Pool Options:
+  --dumps DIR       Dumps directory (required)
+  --output DIR      Output root directory (required)
+
+Run Options:
+  --source DIR      Source directory (required)
+  --output DIR      Output root directory (required)
+  --jobs N          Parallel dump jobs (default: 1)
+
+Environment Variables (override config):
+  PHP56         PHP 5.6 binary path
+  PHP56_INI     PHP 5.6 ini file path
+  ARM56_SO      arm56.so path
+  ARM56_TMP     arm56 output directory
+
+Examples:
+  # Full pipeline
+  ioncube-strip run --source /path/to/encrypted --output /path/to/workdir
+
+  # Individual steps
+  ioncube-strip scan --source /path/to/encrypted --output files.list
+  ioncube-strip dump --source /path/to/encrypted --output /path/to/workdir
+  ioncube-strip pool --dumps /path/to/workdir/dumps --output /path/to/workdir
+
+Requirements:
+  - PHP 5.6 CLI with arm56 extension (see INSTALL.md)
+  - Python 3.8+ with PyYAML (pip install -r requirements.txt)
+
+Legal:
+  This tool is for legitimate recovery of abandoned/licensed software only.
+  See LEGAL.md for details.
+EOF
+}
+
+# Main
+main() {
+    if [[ $# -eq 0 ]]; then
+        show_help
+        exit 1
+    fi
+
+    case "$1" in
+        scan) shift; cmd_scan "$@";;
+        dump) shift; cmd_dump "$@";;
+        pool) shift; cmd_pool "$@";;
+        run) shift; cmd_run "$@";;
+        --help|-h) show_help;;
+        --version|-v) echo "ioncube-strip v$VERSION";;
+        *) echo "Unknown command: $1" >&2; show_help; exit 1;;
+    esac
+}
+
+main "$@"

@@ -1,0 +1,7 @@
+# Production dependencies
+pyyaml>=6.0
+
+# Development dependencies
+ruff>=0.5.0
+pytest>=7.4.0
+pytest-cov>=4.1.0

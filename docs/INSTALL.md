@@ -1,0 +1,202 @@
+# ioncube-strip — Installation Guide
+
+## System Requirements
+
+| Component | Version | Notes |
+|-----------|---------|-------|
+| OS | Linux (tested), macOS | Primary target: Linux |
+| Python | 3.8+ | For pool extraction |
+| PHP | 5.6 CLI | **Required for dump stage** |
+| arm56 | Custom build | PHP extension for ionCube hooking |
+
+## Python Dependencies
+
+```bash
+pip install -r requirements.txt
+# Or manually:
+pip install pyyaml ruff pytest
+```
+
+## PHP 5.6 Installation
+
+### Ubuntu/Debian (using ondrej PPA)
+
+```bash
+sudo add-apt-repository ppa:ondrej/php
+sudo apt update
+sudo apt install php5.6-cli php5.6-dev php5.6-common
+```
+
+### Compile from Source
+
+```bash
+# Install build dependencies
+sudo apt install build-essential libxml2-dev libssl-dev libsqlite3-dev \
+    libbz2-dev libcurl4-openssl-dev libjpeg-dev libpng-dev libfreetype6-dev \
+    libonig-dev libzip-dev libreadline-dev libedit-dev
+
+# Download and compile
+wget https://museum.php.net/php5/php-5.6.40.tar.gz
+tar xzf php-5.6.40.tar.gz
+cd php-5.6.40
+./configure --prefix=/usr/local/php56 \
+    --enable-cli \
+    --with-config-file-path=/etc/php56 \
+    --with-openssl \
+    --with-curl \
+    --with-zlib \
+    --enable-mbstring \
+    --enable-sockets
+make -j$(nproc)
+sudo make install
+```
+
+### Verify PHP 5.6
+
+```bash
+/usr/local/php56/bin/php -v
+# Should show: PHP 5.6.x (cli)
+```
+
+## arm56 Extension Build
+
+The `arm56` extension is **not included** in this repository. You must build it separately.
+
+### Source
+
+The arm56 source is available from the WHMCS un-encryption project or ionCube community forks.
+
+### Build Requirements
+
+- PHP 5.6 development headers (`php5.6-dev` or compiled source)
+- GCC compatible with PHP 5.6 (GCC 7-9 recommended)
+- ionCube loader development headers (if available)
+
+### Build Steps
+
+```bash
+# Assuming arm56 source is in /tmp/arm56
+cd /tmp/arm56
+
+# Set PHP 5.6 paths
+export PHP_PREFIX=/usr/local/php56
+export PATH=$PHP_PREFIX/bin:$PATH
+
+# Configure and build
+phpize
+./configure --with-php-config=$PHP_PREFIX/bin/php-config
+make
+
+# Install
+sudo make install
+# Or manually copy:
+# cp modules/arm56.so /usr/local/lib/arm56.so
+```
+
+### Verify arm56
+
+```bash
+# Check extension loads
+/usr/local/php56/bin/php -c /etc/php56/php.ini -d extension=/usr/local/lib/arm56.so -m | grep arm56
+# Should show: arm56
+```
+
+## PHP 5.6 INI Configuration
+
+Create `/etc/php56/php.ini` (or your chosen path):
+
+```ini
+; Minimal PHP 5.6 config for ioncube-strip
+extension=arm56.so
+
+; Memory and execution limits
+memory_limit = 256M
+max_execution_time = 300
+
+; Error handling
+error_reporting = E_ALL & ~E_DEPRECATED & ~E_STRICT
+display_errors = Off
+log_errors = On
+error_log = /tmp/php56_errors.log
+
+; Disable unnecessary extensions
+disable_functions = exec,passthru,shell_exec,system,proc_open,popen
+```
+
+## ioncube-strip Configuration
+
+Copy and customize the example config:
+
+```bash
+cp config/ioncube-strip.yaml.example ioncube-strip.yaml
+```
+
+Edit `ioncube-strip.yaml` with your paths:
+
+```yaml
+toolchain:
+  php56: "/usr/local/php56/bin/php"
+  php56_ini: "/etc/php56/php.ini"
+  arm56_so: "/usr/local/lib/arm56.so"
+  arm56_tmp: "/tmp/arm56_output"
+```
+
+Or use environment variables (override config):
+
+```bash
+export PHP56=/usr/local/php56/bin/php
+export PHP56_INI=/etc/php56/php.ini
+export ARM56_SO=/usr/local/lib/arm56.so
+export ARM56_TMP=/tmp/arm56_output
+```
+
+## Verify Installation
+
+```bash
+# Check CLI help
+./bin/ioncube-strip --help
+
+# Run quality gates
+make check
+
+# Test scan on fixture
+./bin/ioncube-strip scan --source tests/fixtures
+```
+
+## Troubleshooting
+
+### "PHP 5.6 not found"
+- Verify `PHP56` path in config or env
+- Check binary is executable: `ls -la $PHP56`
+
+### "arm56.so not found"
+- Verify `ARM56_SO` path
+- Rebuild arm56 against your PHP 5.6
+- Check `php -m` shows arm56
+
+### "Permission denied on /tmp/arm56_output"
+- Ensure directory exists and is writable
+- Or set `ARM56_TMP` to a writable location
+
+### "PHP 5.6 segfaults on include"
+- Check PHP 5.6 compiled with `--enable-debug` for backtrace
+- Verify ionCube file is actually 5.x format
+- Try with minimal ini (disable all non-essential extensions)
+
+### Build fails on modern GCC
+- Use GCC 7-9: `export CC=gcc-9 CXX=g++-9`
+- Apply compatibility patches to arm56 source if needed
+
+## Docker Alternative
+
+If building PHP 5.6 + arm56 is problematic, consider using a Docker image:
+
+```dockerfile
+# Example Dockerfile (not provided in repo)
+FROM ubuntu:20.04
+# Install PHP 5.6 from ondrej PPA
+# Build arm56
+# Copy ioncube-strip
+```
+
+See [GitHub Discussions](https://github.com/yourusername/ioncube-strip/discussions) for community Docker images.

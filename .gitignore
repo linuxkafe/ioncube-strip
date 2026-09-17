@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# AES internal (not for publication)
+aes/
+.aes/
+
+# Test fixtures with real encrypted code (legal risk)
+tests/fixtures/dumps/
+
+# Local config
+ioncube-strip.yaml
+*.local.yaml
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+*.tmp

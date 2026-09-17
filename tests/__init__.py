@@ -1,0 +1,1 @@
+# ioncube-strip tests package

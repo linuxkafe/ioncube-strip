@@ -1,0 +1,67 @@
+# ioncube-strip Configuration Template
+# Copy to ioncube-strip.yaml and customize
+
+toolchain:
+  # PHP 5.6 CLI binary (required for dump stage)
+  # Install from source or use distro package (e.g., ondrej/php for Ubuntu)
+  php56: "/usr/local/bin/php5.6"
+
+  # PHP 5.6 ini file (required for dump stage)
+  # Must have extension=arm56.so enabled
+  php56_ini: "/etc/php56/php.ini"
+
+  # arm56 extension (required for dump stage)
+  # Build from https://github.com/ioncube/arm56 (or WHMCS project fork)
+  # Requires PHP 5.6 headers and development tools
+  arm56_so: "/usr/local/lib/arm56.so"
+
+  # arm56 output directory (where extension writes dumps)
+  # Must be writable by the user running ioncube-strip
+  arm56_tmp: "/tmp/arm56_output"
+
+markers:
+  # Patterns to identify ionCube 5.x encrypted files
+  # type: "substring" (simple contains) or "regex" (full regex match)
+  - pattern: "_il_exec"
+    type: "substring"
+  - pattern: "//\\s*00e5"
+    type: "regex"
+  # Add custom markers here for other ionCube variants:
+  # - pattern: "ionCube Loader"
+  #   type: "substring"
+
+output:
+  # Directory for collected dumps (relative to output root)
+  dumps_dir: "dumps"
+
+  # Directory for extracted pools (relative to output root)
+  pools_dir: "pools"
+
+  # Index file name (inside pools_dir)
+  index_file: "_index.json"
+
+extraction:
+  # Minimum length of ASCII run to keep
+  min_run_length: 3
+
+  # Maximum length of ASCII run (longer runs are likely binary/garbage)
+  max_run_length: 2000
+
+  # Character set for run extraction: "ascii" or "utf-8"
+  # ascii: only 0x20-0x7E (printable ASCII)
+  # utf-8: attempts UTF-8 decoding (experimental)
+  charset: "ascii"
+
+  # Number of worker processes for parallel pool extraction
+  # 0 = auto (CPU count)
+  workers: 0
+
+parallelism:
+  # Number of parallel dump jobs
+  # WARNING: arm56 uses shared /tmp/arm56_output/
+  # Set >1 only if you configure unique temp dirs per job
+  dump_jobs: 1
+
+  # Number of workers for pool extraction (0 = auto)
+  # Overrides extraction.workers if set
+  pool_workers: 0
