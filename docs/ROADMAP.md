@@ -56,7 +56,6 @@ neither of which belongs in this repository.
 | ID | Title | Priority | Status | Effort |
 |----|-------|----------|--------|--------|
 | T018 | Dry-run mode for all subcommands | medium | done | S |
-| T019 | Verbose/progress logging — `--verbose` is parsed by every subcommand and currently does nothing | medium | stub | S |
 | T020 | Error handling improvements (continue on failure) | medium | done | S |
 | T021 | Man page generation | low | pending | S |
 | T023 | GitHub Actions: lint + unit + tool-free integration | medium | done | M |
