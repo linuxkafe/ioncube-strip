@@ -16,6 +16,10 @@ src = ["lib", "tests", "scripts"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/integration"]
+# Tests import lib.* and conftest. Without this, resolution depends on the
+# invocation: `python3 -m pytest` puts the CWD on sys.path, bare `pytest` does
+# not. That difference is invisible until someone runs it the other way.
+pythonpath = ["."]
 
 [tool.ruff.format]
 # The codebase is consistently single-quoted; ruff's default is double. Without

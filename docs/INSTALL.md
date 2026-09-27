@@ -259,4 +259,6 @@ FROM ubuntu:20.04
 # Copy ioncube-strip
 ```
 
-See [GitHub Discussions](https://github.com/yourusername/ioncube-strip/discussions) for community Docker images.
+Community Docker images for PHP 5.6 plus arm56 are not provided by this
+project — see the Docker item in [`ROADMAP.md`](ROADMAP.md) for why. Build it
+yourself, or open an issue if you have one worth sharing.

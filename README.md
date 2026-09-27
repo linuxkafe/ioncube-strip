@@ -1,209 +1,309 @@
 # ioncube-strip
 
-**Offline recovery of class shape from ionCube 5.x encrypted PHP files**
+**Recover the class structure of ionCube 5.x encrypted PHP files — offline, with nothing but a PHP 5.6 runtime.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PHP 5.6](https://img.shields.io/badge/PHP-5.6-8892BF.svg)](https://www.php.net/)
 
-## What it does
+---
 
-`ioncube-strip` recovers the *shape* of ionCube-encrypted PHP files (v5.x era, PHP 5.0-5.6):
+## Read this first
 
-1. **Scanning** a codebase for ionCube markers (`_il_exec`, `// 00e5`)
-2. **Loading** each encrypted file under PHP 5.6 with the ionCube Loader
-3. **Reporting** what the Loader itself resolved: parent class, interfaces,
-   constants, properties, method signatures, and per-method literal *counts*
-   (`manifest`, `symbols`)
-4. **Extracting** literal pool strings — available only with the legacy arm56
-   build (`dump`, `pool`), see below
+This tool recovers **declarations**, not **behaviour**. That distinction is the
+whole story, and it is not a limitation of this implementation.
 
-The manifest is the primary evidence for reconstructing a class. While a file
-is still encrypted the Loader must resolve its inheritance in order to load it,
-so the parent and interfaces it reports are the true ones, not inferred.
+- **You get**, for every class the tool can load: the true parent class,
+  interface list, abstract/final flags, constants, properties, and every method
+  signature with visibility, static/abstract, and parameter names and types.
+  Doc comments survive encryption too, so `@param` and `@return` types come
+  back as well.
+- **You do not get**: a single method body. Not one conditional, query, loop or
+  calculation. They are not hidden from this tool — they are not present in the
+  runtime at all. `arm56` reports `content_faulted` and `num_ops: 0` for every
+  encoded method, which is the extension's own account of what it found.
 
-### Two capabilities, not equally supported
+If you need working code, this tool hands you a correct API map and you still
+have to write the implementation. That is a large job, made smaller by not
+having to guess the API. If you need to *decompile*, this is the wrong tool and
+no version of it will be the right one.
 
-| Capability | Stages | Needs |
-|---|---|---|
-| Class shape, method signatures, literal counts | `manifest`, `symbols` | the in-tree v4 extension (`arm56/arm56.c`) |
-| Literal pool strings | `dump`, `pool` | the **legacy** arm56 build, which is not in this repo |
+Roughly one encrypted file in three cannot be read even for declarations — see
+[Where it does not work](#where-it-does-not-work). That is stated up front
+because a tool that only tells you what it can do is worth more than one that
+surprises you later.
 
-The in-tree extension writes JSON and cannot feed the pool extractor. The
-legacy pool path also carries an open question: our own findings record that
-the Loader frees the literal pool once a body has run and
-`op_array->reserved[3]` is NULL for encoded code, which would mean pool
-*content* is unrecoverable in principle. Read
-[docs/CONFIGURATION.md](docs/CONFIGURATION.md) ("Two arm56 generations") before
-relying on it.
+## Measured on WHMCS 5.3.12
 
-**Neither capability recovers method bodies.** Bodies require executing the code
-with the original toolchain present, or reconstructing from signatures and
-domain knowledge.
+PHP 5.6.40, ionCube Loader `ionCube24`, `arm56` v4, 516 encrypted files:
 
-## Quick Start
+| | |
+|---|---|
+| Classes recovered | 162 |
+| **Declaration fidelity** | **162 / 162 identical to the encrypted original** |
+| Generated skeletons that parse and load under PHP 5.6 | 143 / 143 |
+| Method declarations | 1437 |
+| Property declarations | 550 |
+| Constant declarations | 104 |
+| Encrypted PHP read | 7,167,567 bytes |
+| Skeleton PHP produced | 7,526 lines |
+| **Method bodies recovered** | **0** |
+| Wall clock, full corpus | ~5 s on 4 jobs |
 
-### Prerequisites
+"Fidelity" means this: the encrypted original and a generated skeleton were
+reflected in separate PHP 5.6 processes and the facts diffed — parent, interface
+list, `abstract`, `final`, constants, own properties, own method signatures
+including parameter names. Not one difference. Full accounting, including what
+was tried and did not work, is in
+[`docs/VALIDATION.md`](docs/VALIDATION.md).
 
-- **PHP 5.6 CLI** with development headers
-- **arm56 v4 extension** (source is in `arm56/` — see [INSTALL.md](docs/INSTALL.md))
-- **Python 3.8+** with PyYAML (`pip install -r requirements.txt`)
+## How it works
 
-### Installation
+Two independent mechanisms read the same encrypted files and share nothing but
+the file list:
+
+```
+manifest/   encrypted.php ─▶ PHP 5.6 + ionCube Loader ─▶ Reflection
+              The Loader must resolve inheritance to load the file, so the
+              parent and interfaces it reports are the real ones.
+
+symbols/    encrypted.php ─▶ PHP 5.6 + Loader + arm56 v4 ─▶ JSON op_array
+              arm56 wraps zend_compile_file and serialises the op_array the
+              Loader materialises: literal counts, opcodes, signatures.
+```
+
+Because they are independent, their agreement is evidence. The test suite
+cross-checks them: class name lists must match for every file, and for a class
+with no parent and no interfaces — where both tools are counting the same
+quantity — the method counts must match exactly. On WHMCS that is 167 files and
+118 of 118 classes. A disagreement is a defect signal, not noise.
+
+Encrypted library files reference classes living in *other* encrypted files,
+and the Loader raises an ordinary PHP fatal when one is missing. A fatal cannot
+be caught, so each attempt runs in its own process; the missing symbol names are
+learned from stderr and pre-declared as empty stubs of the right kind, and the
+run repeats until the set stops growing. On WHMCS that converges in three
+rounds, learning 30 symbols.
+
+## Requirements
+
+- **PHP 5.6 CLI** with development headers. Not 7+. The ionCube Loader is a
+  5.x-era `zend_extension` and will not load otherwise.
+- **The ionCube Loader for PHP 5.6** — not included here, and you must be
+  entitled to it.
+- **arm56 v4** — source is in [`arm56/`](arm56), MIT, first-party. Build it
+  yourself against your PHP 5.6.
+- **Python 3.8+** with PyYAML.
+
+### The ini, which is the part people get wrong
+
+The Loader must be the **first** `zend_extension` or it aborts. A stock Debian
+php.ini loads opcache as a `zend_extension` at priority 10 and will conflict, so
+use a dedicated ini:
+
+```ini
+zend_extension=/path/to/ioncube_loader_lin_5.6.so
+extension=json.so
+error_reporting = E_ALL
+display_errors = stderr
+```
+
+Note `arm56` loads with `extension=`, **not** `zend_extension=`. It declares a
+plain `zend_module_entry`; loaded the other way PHP reports *"doesn't appear to
+be a valid Zend extension"* and every `arm56_*` function is simply absent — a
+wrong answer rather than an error.
+
+## Install
 
 ```bash
-git clone https://github.com/yourusername/ioncube-strip.git
+git clone https://github.com/linuxkafe/ioncube-strip.git
 cd ioncube-strip
 pip install -r requirements.txt
 
-# Build the extension against your PHP 5.6
-cd arm56 && phpize && ./configure && make && sudo make install && cd ..
+# Build arm56 against your PHP 5.6
+cd arm56
+autoreconf                     # only if config.m4 changed
+phpize
+./configure --with-php-config=/usr/bin/php-config5.6
+make
+sudo make install
+cd ..
 ```
+
+`arm56/configure.in` and `arm56/config.h.in` are not tracked — they are
+regenerated by `autoconf`. Only `arm56.c` and `config.m4` are committed, and no
+build artifact ever is.
 
 ### Configuration
 
-Copy the example config and customize paths:
-
 ```bash
 cp config/ioncube-strip.yaml.example ioncube-strip.yaml
-# Edit ioncube-strip.yaml with your PHP 5.6 and arm56 paths
+# edit with your paths
 ```
 
-Or use environment variables:
+Or use environment variables, which **override** the config file:
 
 ```bash
-export PHP56=/path/to/php5.6
-export PHP56_INI=/path/to/php56.ini
-export ARM56_SO=/path/to/arm56.so
+export PHP56=/usr/bin/php5.6
+export PHP56_INI=/path/to/php56-ioncube.ini
+export ARM56_SO=/usr/local/lib/arm56.so
+export PHP56_EXTRA=/path/to/json.so   # only if the 5.6 build lacks json_encode
 ```
 
-Check which arm56 generation you actually have:
+Check which arm56 you actually have before anything else:
 
 ```bash
 python3 lib/probe_arm56.py --config config/ioncube-strip.yaml.example
+# v4:  arm56 generation: v4 (4.0.0-spike)
 ```
 
-### Usage
-
-**Class shape (works with the in-tree extension):**
+## Usage
 
 ```bash
 # 1. Scan for encrypted files
-./bin/ioncube-strip scan --source /path/to/encrypted/code --output files.list
+./bin/ioncube-strip scan --source /path/to/encrypted --output files.list
 
-# 2. Reflection manifests — parent, interfaces, signatures
-./bin/ioncube-strip manifest --files files.list --output manifests/
+# 2. Class shape: parent, interfaces, constants, properties, signatures
+./bin/ioncube-strip manifest --files files.list --output manifests --jobs 4
 
-# 3. arm56 symbol dumps — literal counts, opcodes
-./bin/ioncube-strip symbols --files files.list --output symbols/
+# 3. arm56 symbols: literal counts, opcodes
+./bin/ioncube-strip symbols  --files files.list --output symbols  --jobs 4
 ```
 
-**Literal pools (needs the legacy arm56 build):**
+`--verbose` reports the resolved toolchain, the arm56 generation and the counts
+behind the run, on stderr so stdout stays a clean list. `--dry-run` prints what
+would be executed and creates nothing.
 
-```bash
-./bin/ioncube-strip dump --source /path/to/encrypted/code --output /path/to/workdir
-./bin/ioncube-strip pool --dumps /path/to/workdir/dumps --output /path/to/workdir
-```
+Full reference: [`docs/USAGE.md`](docs/USAGE.md).
 
 ### Output
 
 ```
 manifests/
-├── _manifest_report.json    # per-file status, learned stub symbols
-└── _<sanitized_path>.manifest.json   # parent, interfaces, constants,
-                                       # properties, method signatures
+├── _manifest_report.json              per-file status, learned stub symbols
+└── _<sanitized_path>.manifest.json    parent, interfaces, constants,
+                                       properties, method signatures
 
 symbols/
-├── _batch_report.json       # per-file status and counts
-└── _<sanitized_path>.json   # symbols, literal counts, opcodes
-
-workdir/                    # legacy pool path only
-├── dumps/                  # raw arm56 hex output
-└── pools/                  # deduplicated ASCII strings per function
-    ├── myFunction.txt
-    └── _index.json
+├── _batch_report.json                 per-file status and counts
+└── _<sanitized_path>.json             symbols, literal counts, opcodes
 ```
 
-## Documentation
+### A note on the legacy `dump` / `pool` stages
 
-- [Installation Guide](docs/INSTALL.md) — PHP 5.6, arm56 build, troubleshooting
-- [Usage Guide](docs/USAGE.md) — All commands, options, examples
-- [Configuration](docs/CONFIGURATION.md) — Config schema, the two arm56 generations
-- [Legal Notice](docs/LEGAL.md) — **Read before use**
+`dump`, `pool` and `run` are the original literal-pool pipeline. They consume
+the *legacy* arm56 hex-dump format, which the extension in this repository does
+not produce — it writes JSON. Against the in-tree extension they would collect
+nothing, so `dump` refuses to start rather than reporting an empty success.
 
-## How it works
+The legacy extension is not in this repository, and `docs/VALIDATION.md` records
+the finding that literal pool *content* is unrecoverable in principle with this
+toolchain. The code is kept because it is written and tested, but **no part of
+this project claims it works**, and nothing in the documentation advertises it.
+See [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md), "Two arm56 generations".
 
-Two independent mechanisms read the same encrypted files:
+## Where it does not work
 
-```
-manifest/  encrypted.php ─▶ PHP 5.6 + ionCube Loader ─▶ Reflection
-             The Loader must resolve inheritance to load the file, so the
-             parent, interfaces and signatures are the real ones.
+On the full 516-file WHMCS corpus, 167 files yield class shape. The 349 that do
+not, by cause:
 
-symbols/   encrypted.php ─▶ PHP 5.6 + Loader + arm56 v4 ─▶ JSON op_array
-             arm56 (arm56/arm56.c) wraps zend_compile_file and serialises the
-             op_array the Loader materialises, including literal counts.
-```
+| Count | Cause |
+|---|---|
+| 173 | The file calls `exit`/`die` at include time. Sampled 40: **none declared a class**, so there was nothing to recover |
+| 94 | `require '../init.php'` — needs a live application and database |
+| 60 | Needs globals (`$whmcs`) or an undefined method |
+| 22 | Parse errors and other fatals under PHP 5.6 |
 
-They share nothing but the file list, which is what makes their agreement
-meaningful: the integration suite cross-checks the method count between them
-and treats a disagreement as a defect signal. See
-[docs/CONFIGURATION.md](docs/CONFIGURATION.md) ("Cross-check").
+A fake bootstrap was tried for the 154 that appear to need an application —
+fake config, stubbed database functions. It does not help: those files need a
+real database, and the API endpoints additionally carry a direct-access guard
+that exits before any declaration is reached. It is not defeated by `ROOTDIR`,
+`REQUEST_URI` or `IN_API`.
 
-The legacy pool path worked differently — the original arm56 hooked function
-entry and snapshotted `RESERVED[3]`, and `extract_pools.py` parsed the hex
-dumps it wrote. That extension is not in this repository.
-
-## Limitations
-
-- **ionCube 5.x only** — Does not work with ionCube 6.x, 10.x, 12.x
-- **Requires PHP 5.6** — Not compatible with PHP 7+
-- **Shape, not bodies** — Signatures and counts only; no control flow, no decompilation
-- **Pool path needs an external extension** — and may have nothing to produce
-- **Manual reconstruction required** — Human must write the PHP from signatures
-- **Offline only** — No network access, no license server communication
+None of these are class-definition files. That is the category this method can
+read, and 162 classes is what WHMCS has.
 
 ## Testing
 
 ```bash
-make check                     # lint + unit tests, no toolchain needed
-python3 -m pytest tests/integration -v
+make check                          # lint + unit + every policy gate
+python3 -m pytest tests/unit -q     # no toolchain needed
+python3 -m pytest tests/integration -q
 ```
 
-The integration suite has two tiers. The tool-free tier always runs. The
-toolchain/corpus tier skips unless `IONCUBE_STRIP_PHP56`, `IONCUBE_STRIP_INI`,
-`IONCUBE_STRIP_ARM56` and `IONCUBE_STRIP_CORPUS` are set. **A run where those
-skip is not a pass** — it means the tool-free paths passed and the pipeline was
-never exercised on real input.
+The integration suite has two tiers. The **tool-free** tier always runs. The
+**toolchain/corpus** tier skips unless `IONCUBE_STRIP_PHP56`,
+`IONCUBE_STRIP_INI`, `IONCUBE_STRIP_ARM56` and `IONCUBE_STRIP_CORPUS` are set.
+
+**A run where those skip is not a pass.** It means the tool-free paths passed
+and the pipeline was never exercised on real input. With the toolchain and
+corpus set, the full suite is 76 passed, 0 skipped; without, 68 passed and 8
+skipped with every reason printed.
+
+No encrypted fixture is committed, ever — a fixture containing ionCube-encoded
+third-party code is a legal liability. The corpus is always supplied from
+outside the repository.
+
+Quality gates and how to verify they still bite:
+[`docs/QUALITY_GATES.md`](docs/QUALITY_GATES.md).
+
+## Limitations
+
+- **ionCube 5.x only.** Not 6.x, 10.x or 12.x.
+- **PHP 5.6 only.** The Loader will not load on 7+.
+- **Declarations, not behaviour.** See the top of this file.
+- **One loader generation tested** (`ionCube24`), one patchlevel, one corpus.
+- **Roughly a third of files are unreadable**, and not for want of trying.
+- **Offline only.** No network access at any stage, by design.
 
 ## Legal
 
-**Read [LEGAL.md](docs/LEGAL.md) before using.**
+**Read [`docs/LEGAL.md`](docs/LEGAL.md) before using this.** It is not legal
+advice.
 
-This tool is for **legitimate recovery** of:
-- Abandoned software you have a license for
-- Software whose license server has been shut down
-- Digital preservation of cultural heritage
-- Authorized security research
+This tool is for recovering software you already hold a licence to: abandoned
+installations whose vendor and licence server are gone, and digital
+preservation. ionCube encryption is a technical protection measure under DMCA
+1201 and EUCD Art. 6, and circumvention may be unlawful in your jurisdiction
+even for interoperability. The exemptions that exist are narrow and
+fact-specific. Consult a qualified attorney before using this on code you do not
+own or have explicit rights to.
 
-**Do NOT use for:**
-- Circumventing active license enforcement
-- Unauthorized access to proprietary systems
-- Redistributing recovered code without permission
+This repository contains no ionCube Loader, no decoder, no PHP 5.6 binary and no
+encrypted PHP files. The `arm56` extension here is first-party MIT source
+written for this project; the *legacy* arm56 extension it replaced is not
+included, and its licensing is your responsibility.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Run `make check` (lint + tests)
-4. Submit a pull request
+```bash
+make check              # must pass; the gates are real, verify them
+```
 
-Two version floors are enforced by tests, not by the linter: every shipped
-`.php` file must parse under PHP 5.6 (`tests/unit/test_php56_syntax.py`) and
-`lib/` must avoid 3.9+ APIs (`tests/unit/test_python_floor.py`).
+Two version floors are enforced by tests, not by the linter, because the
+obvious tool cannot see either: every shipped `.php` file must parse under
+PHP 5.6 (`tests/unit/test_php56_syntax.py`) and `lib/` must avoid 3.9+ APIs
+(`tests/unit/test_python_floor.py`). A contributor who only runs `php -l` on
+8.4 will not catch a 7.0 construct, and that is a bug that reaches production.
+
+If you add a gate, verify it fails when it should. A gate that cannot fail is
+worse than no gate — this project shipped three of them before they were found.
+
+## Documentation
+
+| | |
+|---|---|
+| [INSTALL.md](docs/INSTALL.md) | PHP 5.6, arm56 build, troubleshooting |
+| [USAGE.md](docs/USAGE.md) | All subcommands, options, examples |
+| [CONFIGURATION.md](docs/CONFIGURATION.md) | Config schema, the two arm56 generations |
+| [VALIDATION.md](docs/VALIDATION.md) | Measured results on WHMCS, and what was tried and failed |
+| [REQUIREMENTS.md](docs/REQUIREMENTS.md) | Functional and non-functional requirements |
+| [ROADMAP.md](docs/ROADMAP.md) | What is done, what is open, what was measured away |
+| [QUALITY_GATES.md](docs/QUALITY_GATES.md) | Every gate, and how to verify it bites |
+| [LEGAL.md](docs/LEGAL.md) | Legal notice — read first |
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).
 
 SPDX-License-Identifier: MIT
