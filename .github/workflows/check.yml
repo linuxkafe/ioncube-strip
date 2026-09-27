@@ -7,7 +7,7 @@ name: check
 # pipeline works" — it means the tool-free paths passed, nothing more.
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
 
 jobs:
