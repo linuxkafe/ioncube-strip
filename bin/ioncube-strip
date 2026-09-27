@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# ioncube-strip — Offline ionCube 5.x literal pool extractor
+# ioncube-strip — Offline ionCube 5.x class shape extractor
 # SPDX-License-Identifier: MIT
 
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${SCRIPT_DIR}/../lib"
@@ -65,6 +65,29 @@ check_toolchain() {
     [[ $missing -eq 0 ]] || exit 2
 }
 
+# Check PHP 5.6 + ini only. The manifest stage runs under the ionCube Loader
+# but never touches arm56, so demanding arm56 there would reject a valid setup.
+check_toolchain_php() {
+    local missing=0
+    [[ -x "$PHP56" ]] || { echo "ERROR: PHP 5.6 not found at $PHP56" >&2; missing=1; }
+    [[ -f "$PHP56_INI" ]] || { echo "ERROR: PHP 5.6 ini not found at $PHP56_INI" >&2; missing=1; }
+    [[ $missing -eq 0 ]] || exit 2
+}
+
+# Identify the arm56 generation that is actually loaded.
+#
+# The two generations are not interchangeable and neither fails loudly when fed
+# to the wrong stage: collect_dumps.py globs for hex dumps that the v4 extension
+# never writes, returns False, and the pipeline reports "no dumps collected" —
+# indistinguishable from a genuinely empty result. See docs/CONFIGURATION.md,
+# "Two arm56 generations".
+probe_generation() {
+    local config="$1"
+    python3 "$LIB_DIR/probe_arm56.py" --config "$config" --json 2>/dev/null \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("generation",""))' \
+        2>/dev/null || echo ""
+}
+
 # Subcommand: scan
 cmd_scan() {
     local source="" output="" config="" dry_run=0 verbose=0
@@ -90,8 +113,13 @@ cmd_scan() {
         return 0
     fi
 
-    python3 "$LIB_DIR/find_encrypted.py" --config "$config" "$source" \
-        | { [[ -n "$output" ]] && tee "$output" || cat; }
+    # tee on success, cat on failure: `a && b || c` would run cat after a
+    # successful tee whenever the pipe closed early, duplicating the output.
+    if [[ -n "$output" ]]; then
+        python3 "$LIB_DIR/find_encrypted.py" --config "$config" "$source" | tee "$output"
+    else
+        python3 "$LIB_DIR/find_encrypted.py" --config "$config" "$source"
+    fi
 }
 
 # Subcommand: dump
@@ -118,6 +146,17 @@ cmd_dump() {
     resolve_toolchain "$config"
     check_toolchain
 
+    case "$(probe_generation "$config")" in
+        v4)
+            echo "ERROR: the loaded arm56 is the in-tree v4 build, which writes" >&2
+            echo "       JSON to ARM56_JSON. The 'dump' stage needs the legacy" >&2
+            echo "       hex-dump build and would collect nothing." >&2
+            echo "       Use 'ioncube-strip symbols' for this extension." >&2
+            echo "       See docs/CONFIGURATION.md, 'Two arm56 generations'." >&2
+            exit 3
+            ;;
+    esac
+
     mkdir -p "$output/dumps"
 
     # Get list of encrypted files
@@ -135,7 +174,7 @@ cmd_dump() {
     local i=0
     for f in "${enc_files[@]}"; do
         i=$((i + 1))
-        rel="${f#${source}/}"
+        rel="${f#"${source}"/}"
         echo "[$i/${#enc_files[@]}] Dumping $rel"
 
         if [[ $dry_run -eq 1 ]]; then
@@ -194,6 +233,111 @@ cmd_pool() {
     python3 "$LIB_DIR/extract_pools.py" --dumps "$dumps" --output "$output" --config "$config"
 }
 
+# Subcommand: manifest
+#
+# Reflection manifests for encrypted classes. Runs one PHP 5.6 process per
+# target under the ionCube Loader and records the parent, interfaces,
+# constants, properties and method signatures Reflection reports. arm56 is not
+# required: nothing here reads the literal buffer.
+cmd_manifest() {
+    local files="" source="" output="" config="" jobs=4 rounds=8 limit=""
+    local timeout=30 dry_run=0 verbose=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --files) files="$2"; shift 2;;
+            --source) source="$2"; shift 2;;
+            --output) output="$2"; shift 2;;
+            --config) config="$2"; shift 2;;
+            --jobs) jobs="$2"; shift 2;;
+            --rounds) rounds="$2"; shift 2;;
+            --limit) limit="$2"; shift 2;;
+            --timeout) timeout="$2"; shift 2;;
+            --dry-run) dry_run=1; shift;;
+            --verbose) verbose=1; shift;;
+            *) echo "Unknown option: $1" >&2; exit 1;;
+        esac
+    done
+
+    [[ -n "$files" ]] || { echo "ERROR: --files required" >&2; exit 1; }
+    [[ -n "$output" ]] || { echo "ERROR: --output required" >&2; exit 1; }
+    [[ -f "$files" ]] || { echo "ERROR: File list not found: $files" >&2; exit 1; }
+
+    config="$(load_config "${config:-$DEFAULT_CONFIG}")"
+
+    local -a cmd=(python3 "$LIB_DIR/class_manifest.py"
+                  --files "$files" --output "$output"
+                  --jobs "$jobs" --rounds "$rounds" --timeout "$timeout")
+    [[ -n "$source" ]] && cmd+=(--source "$source")
+    [[ -n "$limit" ]] && cmd+=(--limit "$limit")
+    [[ "$config" != "$DEFAULT_CONFIG" ]] && cmd+=(--config "$config")
+
+    if [[ $dry_run -eq 1 ]]; then
+        echo "[DRY-RUN] ${cmd[*]}"
+        return 0
+    fi
+
+    resolve_toolchain "$config"
+    check_toolchain_php
+    mkdir -p "$output"
+    "${cmd[@]}"
+}
+
+# Subcommand: symbols
+#
+# arm56 symbol dumps for encrypted files. Records the symbols the Loader
+# registers for each target, with arm56 loaded.
+cmd_symbols() {
+    local files="" source="" output="" config="" jobs=4 rounds=6 limit=""
+    local timeout=30 dry_run=0 verbose=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --files) files="$2"; shift 2;;
+            --source) source="$2"; shift 2;;
+            --output) output="$2"; shift 2;;
+            --config) config="$2"; shift 2;;
+            --jobs) jobs="$2"; shift 2;;
+            --rounds) rounds="$2"; shift 2;;
+            --limit) limit="$2"; shift 2;;
+            --timeout) timeout="$2"; shift 2;;
+            --dry-run) dry_run=1; shift;;
+            --verbose) verbose=1; shift;;
+            *) echo "Unknown option: $1" >&2; exit 1;;
+        esac
+    done
+
+    [[ -n "$files" ]] || { echo "ERROR: --files required" >&2; exit 1; }
+    [[ -n "$output" ]] || { echo "ERROR: --output required" >&2; exit 1; }
+    [[ -f "$files" ]] || { echo "ERROR: File list not found: $files" >&2; exit 1; }
+
+    config="$(load_config "${config:-$DEFAULT_CONFIG}")"
+
+    local -a cmd=(python3 "$LIB_DIR/dump_batch.py"
+                  --files "$files" --output "$output"
+                  --jobs "$jobs" --rounds "$rounds" --timeout "$timeout")
+    [[ -n "$source" ]] && cmd+=(--source "$source")
+    [[ -n "$limit" ]] && cmd+=(--limit "$limit")
+    [[ "$config" != "$DEFAULT_CONFIG" ]] && cmd+=(--config "$config")
+
+    if [[ $dry_run -eq 1 ]]; then
+        echo "[DRY-RUN] ${cmd[*]}"
+        return 0
+    fi
+
+    resolve_toolchain "$config"
+    check_toolchain
+
+    if [[ "$(probe_generation "$config")" == "unverified" ]]; then
+        echo "WARNING: arm56_version() is absent, so the loaded extension is not" >&2
+        echo "         the in-tree v4 build. 'symbols' needs arm56_dump();" >&2
+        echo "         see docs/CONFIGURATION.md, 'Two arm56 generations'." >&2
+    fi
+
+    mkdir -p "$output"
+    "${cmd[@]}"
+}
+
 # Subcommand: run (full pipeline)
 cmd_run() {
     local source="" output="" config="" jobs=1 dry_run=0 verbose=0
@@ -223,15 +367,22 @@ cmd_run() {
 # Help
 show_help() {
     cat <<EOF
-ioncube-strip v$VERSION — Offline ionCube 5.x literal pool extractor
+ioncube-strip v$VERSION — Offline ionCube 5.x class shape extractor
 
 Usage: ioncube-strip <command> [options]
 
 Commands:
   scan     Scan for ionCube-encrypted PHP files
-  dump     Execute encrypted files under PHP 5.6 + arm56 to produce dumps
-  pool     Extract literal pools from collected dumps
-  run      Run full pipeline (scan -> dump -> pool)
+  manifest Reflection class manifests for encrypted classes (no arm56 needed)
+  symbols  arm56 symbol dumps for encrypted files
+  dump     Legacy literal-pool dump (needs the legacy arm56 build)
+  pool     Extract literal pools from legacy hex dumps
+  run      Legacy pool pipeline (scan -> dump -> pool)
+
+Two capabilities, not equally supported. 'manifest' and 'symbols' work with the
+in-tree arm56 v4 extension. 'dump' and 'pool' need the legacy hex-dump build,
+which is not in this repository, and may have no output to produce at all. See
+docs/CONFIGURATION.md, "Two arm56 generations".
 
 Global Options:
   --config FILE     Configuration file (default: config/ioncube-strip.yaml.example)
@@ -253,6 +404,16 @@ Pool Options:
   --dumps DIR       Dumps directory (required)
   --output DIR      Output root directory (required)
 
+Manifest / Symbols Options:
+  --files FILE      Newline-separated list of target files (required)
+  --source DIR      Base directory for relative paths in the list
+  --output DIR      Output directory (required)
+  --config FILE     Configuration file
+  --jobs N          Parallel PHP processes (default: 4)
+  --rounds N        Max dependency-resolution rounds (default: 8 / 6)
+  --limit N         Process at most N files
+  --timeout N       Per-file timeout in seconds (default: 30)
+
 Run Options:
   --source DIR      Source directory (required)
   --output DIR      Output root directory (required)
@@ -263,6 +424,7 @@ Environment Variables (override config):
   PHP56_INI     PHP 5.6 ini file path
   ARM56_SO      arm56.so path
   ARM56_TMP     arm56 output directory
+  PHP56_EXTRA   Extra 5.6 extension the manifest driver needs (json)
 
 Examples:
   # Full pipeline
@@ -272,6 +434,14 @@ Examples:
   ioncube-strip scan --source /path/to/encrypted --output files.list
   ioncube-strip dump --source /path/to/encrypted --output /path/to/workdir
   ioncube-strip pool --dumps /path/to/workdir/dumps --output /path/to/workdir
+
+  # Class shape and symbols (deeper than the pool pipeline; run separately)
+  ioncube-strip manifest --files files.list --output /path/to/manifests
+  ioncube-strip symbols  --files files.list --output /path/to/symbols
+
+Note:
+  'manifest' and 'symbols' are not part of 'run'. Neither recovers method
+  bodies; see docs/CONFIGURATION.md for what they do and do not yield.
 
 Requirements:
   - PHP 5.6 CLI with arm56 extension (see INSTALL.md)
@@ -294,6 +464,8 @@ main() {
         scan) shift; cmd_scan "$@";;
         dump) shift; cmd_dump "$@";;
         pool) shift; cmd_pool "$@";;
+        manifest) shift; cmd_manifest "$@";;
+        symbols) shift; cmd_symbols "$@";;
         run) shift; cmd_run "$@";;
         --help|-h) show_help;;
         --version|-v) echo "ioncube-strip v$VERSION";;

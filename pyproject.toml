@@ -1,0 +1,18 @@
+# ioncube-strip — tool configuration
+#
+# SPDX-License-Identifier: MIT
+#
+# The Python floor is 3.8, as documented in README.md, docs/INSTALL.md and
+# CLAUDE.md. Declaring it here stops ruff from *recommending* 3.9+ APIs —
+# FURB188 fires on a 3.8-safe slice under py39 and is silent under py38.
+#
+# It does NOT detect 3.9+ API calls already in the code: ruff 0.16 reports no
+# rule, under any selection, for `str.removesuffix` at target py38. Use is
+# therefore caught by tests/unit/test_python_floor.py, not by the linter.
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+src = ["lib", "tests", "scripts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit", "tests/integration"]

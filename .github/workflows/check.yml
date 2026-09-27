@@ -1,0 +1,76 @@
+name: check
+
+# The toolchain/corpus tier needs PHP 5.6, the ionCube Loader and arm56, none of
+# which a GitHub runner has and none of which may be committed (see LEGAL.md).
+# That tier therefore always skips here. The workflow reports the skip count and
+# fails if *everything* skipped, so a green run can never be mistaken for "the
+# pipeline works" — it means the tool-free paths passed, nothing more.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  gates:
+    name: lint, unit and tool-free integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # The Python floor is 3.8 per README/INSTALL/CLAUDE.md. Pin the
+          # runner below 3.9 as well so a 3.9+ API cannot land unnoticed;
+          # tests/unit/test_python_floor.py is the backstop, not the mechanism.
+          python-version: '3.8'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff pytest pyyaml
+
+      - name: Ruff
+        run: python -m ruff check lib/ tests/ scripts/
+
+      - name: Shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck bin/ioncube-strip
+
+      - name: PHP lint
+        # `php -l` on 8.x cannot prove the PHP 5.6 floor; it only proves the
+        # files parse. The floor itself is tests/unit/test_php56_syntax.py.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php-cli
+          php -l lib/dump_one.php
+
+      - name: Unit tests
+        run: python -m pytest tests/unit -v
+
+      - name: Integration tests (tool-free tier)
+        run: python -m pytest tests/integration -v -rs
+
+      - name: Report skipped integration tests
+        run: |
+          count=$(python -m pytest tests/integration -q -rs 2>&1 \
+                  | grep -cE '^SKIPPED' || true)
+          echo "integration tests skipped: $count"
+          echo "These need IONCUBE_STRIP_PHP56 / _INI / _ARM56 / _CORPUS."
+          echo "A non-zero count here is expected on CI and is NOT a pass for"
+          echo "the extraction pipeline. See docs/CONFIGURATION.md."
+          if [ "$count" -eq 0 ]; then
+            echo "Unexpected: nothing skipped. Confirm the tier markers still"
+            echo "work; a silently-empty tier is worse than a skipping one."
+            exit 1
+          fi
+
+      - name: Repository policy gates
+        run: |
+          make check-hardcoded-paths
+          make check-network-calls
+          make check-emoji
+          make check-legal-headers
+          make validate-config

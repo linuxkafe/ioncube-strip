@@ -1,5 +1,22 @@
 # ioncube-strip — Solution Proposal (Phase 2)
 
+> **Superseded in part (2026-09-27, v0.2.0).** Historical record of the
+> original proposal. Two of its claims no longer hold:
+>
+> 1. **"arm56 build not included — documented as prerequisite"** is no longer
+>    true. `arm56/arm56.c` (v4) is now first-party source in this repository.
+>    It serialises op_arrays to JSON and has no hex writer, so it cannot feed
+>    the `dump`→`pool` half of the architecture diagram below.
+> 2. **"Core algorithm: arm56 runtime dumping → hex parsing → ASCII run
+>    extraction"** is contested. `docs/CONFIGURATION.md` records that the
+>    Loader frees the literal pool and `op_array->reserved[3]` is NULL for
+>    encoded code, which would mean the hex-parsing stage has nothing to parse
+>    even with a legacy build. Tracked as `docs/ROADMAP.md` T017.
+>
+> What shipped instead: `manifest` and `symbols`, recovering class shape via
+> two independent mechanisms. See `docs/REQUIREMENTS.md` (FR-7, FR-8) and
+> `aes/kanban.md`.
+
 ## Chosen Approach
 
 Create a **project-agnostic, configurable toolkit** for ionCube 5.x runtime dumping and literal pool extraction. The tool consists of:

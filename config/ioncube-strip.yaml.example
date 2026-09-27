@@ -6,14 +6,21 @@ toolchain:
   # Install from source or use distro package (e.g., ondrej/php for Ubuntu)
   php56: "/usr/local/bin/php5.6"
 
-  # PHP 5.6 ini file (required for dump stage)
-  # Must have extension=arm56.so enabled
+  # PHP 5.6 ini file (required for the manifest and symbol stages)
+  # The ionCube Loader must be the FIRST zend_extension here, or the Loader
+  # aborts with "The Loader must appear as the first entry in the php.ini file".
+  # It must be a zend_extension, not a plain extension.
   php56_ini: "/etc/php56/php.ini"
 
   # arm56 extension (required for dump stage)
   # Build from https://github.com/ioncube/arm56 (or WHMCS project fork)
   # Requires PHP 5.6 headers and development tools
   arm56_so: "/usr/local/lib/arm56.so"
+
+  # Optional: an extra 5.6 extension the manifest driver needs. class_manifest.py
+  # reports a clear error if json_encode is missing, which a minimal php.ini
+  # will not provide. Leave empty to rely on php56_ini providing it.
+  php56_extra: ""
 
   # arm56 output directory (where extension writes dumps)
   # Must be writable by the user running ioncube-strip

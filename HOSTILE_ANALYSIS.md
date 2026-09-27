@@ -1,5 +1,18 @@
 # ioncube-strip — Hostile Analysis (Phase 1)
 
+> **Historical (2026-09-17).** The assumptions below were recorded before the
+> arm56 v4 spike. The load-bearing one is now falsified by our own later
+> findings: "The arm56 extension hooks into the ionCube VM and dumps
+> `RESERVED[3]` literal buffers". `docs/CONFIGURATION.md` records that the
+> Loader frees the pool once a body has run and `reserved[3]` is NULL for
+> encoded code, so the `[KNOWN]` claim about arm56 does not hold for the
+> extension in this repository, and the `[ASSUMED]` claim that pool output
+> suffices for reconstruction is unproven.
+>
+> The reasoning skeleton "runtime dumping is the only viable approach" survives
+> only for class shape, not for literal content. Retained as-is for audit; see
+> `aes/kanban.md` and `docs/ROADMAP.md` (T017).
+
 ## INSIGHTS CONSULTED
 - `/home/seyon/dev/whmcs/ioncube-strip/` (existing implementation)
 - `/home/seyon/dev/whmcs/scripts/` (batch dump scripts)

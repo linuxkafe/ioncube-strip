@@ -1,5 +1,23 @@
 # ioncube-strip — Vision
 
+> **Status (v0.2.0).** The "Solution" and "literal pool" narrative below
+> describes the original thesis. Part of it is now contested by our own
+> findings and is **not** a current claim:
+>
+> - The extension in this repository (`arm56/arm56.c`, the v4 spike) serialises
+>   op_arrays to JSON. It has no hex writer and cannot produce the literal
+>   pools the "Solution" section describes. The extension that did is the
+>   legacy one, which is not in this repository.
+> - Literal pool *content* may be unrecoverable in principle: the Loader frees
+>   the pool once a body has run and `op_array->reserved[3]` is NULL for
+>   encoded code.
+>
+> What the tool actually delivers today is **class shape**: which classes
+> exist, what they extend, what methods they declare, and per-method literal
+> *counts*, via `manifest` and `symbols`. See
+> [CONFIGURATION.md](CONFIGURATION.md) ("Two arm56 generations") and
+> `docs/ROADMAP.md` (T017).
+
 ## Problem
 
 IonCube-encoded PHP software from the 2005-2015 era (PHP 5.0-5.6) is increasingly unmaintainable:

@@ -1,12 +1,14 @@
 # ioncube-strip Makefile
 # Provides common development tasks
 
-.PHONY: help install test lint format check clean
+.PHONY: help install test lint format check clean manifest symbols
 
 # Default target
 help:
 	@echo "ioncube-strip — Available targets:"
 	@echo "  install     Install Python dependencies"
+	@echo "  manifest    Reflection class manifests  (FILES=... OUTPUT=...)"
+	@echo "  symbols     arm56 symbol dumps         (FILES=... OUTPUT=...)"
 	@echo "  test        Run unit tests"
 	@echo "  lint        Run all linters"
 	@echo "  format      Format Python code with ruff"
@@ -29,17 +31,36 @@ test-integration:
 
 # Lint all code
 lint:
-	python3 -m ruff check lib/ tests/
-	@which shellcheck >/dev/null && shellcheck bin/ioncube-strip || echo "shellcheck not installed, skipping"
+	python3 -m ruff check lib/ tests/ scripts/
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck bin/ioncube-strip; \
+	else \
+		echo "shellcheck not installed, skipping"; \
+	fi
 	php -l lib/dump_one.php
 
 # Format Python code
 format:
-	python3 -m ruff format lib/ tests/
+	python3 -m ruff format lib/ tests/ scripts/
 
 # Full quality gate check
 check: lint test
 	@echo "All checks passed"
+
+# Extract class manifests (Reflection) for a list of encrypted files
+# Requires PHP 5.6 + the ionCube loader. Needs json_encode in the 5.6 build.
+manifest:
+	@test -n "$(FILES)" || (echo "usage: make manifest FILES=list.txt OUTPUT=dir" && exit 1)
+	@test -n "$(OUTPUT)" || (echo "usage: make manifest FILES=list.txt OUTPUT=dir" && exit 1)
+	python3 lib/class_manifest.py --files $(FILES) --source $(SOURCE) --output $(OUTPUT) \
+		$(if $(CONFIG),--config $(CONFIG),)
+
+# Extract arm56 symbol dumps for a list of encrypted files
+symbols:
+	@test -n "$(FILES)" || (echo "usage: make symbols FILES=list.txt OUTPUT=dir" && exit 1)
+	@test -n "$(OUTPUT)" || (echo "usage: make symbols FILES=list.txt OUTPUT=dir" && exit 1)
+	python3 lib/dump_batch.py --files $(FILES) --source $(SOURCE) --output $(OUTPUT) \
+		$(if $(CONFIG),--config $(CONFIG),)
 
 # Validate config schema
 validate-config:

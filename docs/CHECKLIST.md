@@ -1,61 +1,76 @@
 # ioncube-strip — Pre-commit / Pre-release Checklist
 
-## Pre-commit (Quick — Run on Every Commit)
+Every command below exists and is wired into `make check` or the CI workflow.
+If one of these does not, delete the line rather than leaving it aspirational:
+a checklist entry pointing at a non-existent gate is worse than no entry.
 
-- [ ] **Tests pass** — `python -m pytest tests/unit -v` (unit tests only)
-- [ ] **Python lint clean** — `ruff check lib/ tests/`
+## Pre-commit (run on every commit)
+
+```bash
+make check          # ruff + shellcheck + php -l + unit tests
+```
+
+Or individually:
+
+- [ ] **Python lint clean** — `ruff check lib/ tests/ scripts/`
 - [ ] **Shell lint clean** — `shellcheck bin/ioncube-strip`
-- [ ] **PHP lint clean** — `php -l lib/dump_one.php` (and any other .php files)
-- [ ] **No hardcoded paths** — `grep -r "/home/" lib/ bin/ config/ ; grep -r "whmcs" lib/ bin/ config/`
-- [ ] **No network calls** — `grep -r "http://\|https://\|curl\|wget\|requests\|urllib" lib/ bin/`
-- [ ] **No emojis in source** — `grep -r "[\xF0-\xF4][\x80-\xBF]{3}" lib/ bin/ tests/ config/`
-- [ ] **Config schema valid** — `python -c "import yaml; yaml.safe_load(open('config/ioncube-strip.yaml.example'))"`
-- [ ] **Diffstory written** — Build output includes what changed, why, untouched, risks
+- [ ] **PHP parses** — `php -l lib/dump_one.php`
+- [ ] **Unit tests pass** — `python3 -m pytest tests/unit`
+- [ ] **Tool-free integration tests pass** — `python3 -m pytest tests/integration`
+- [ ] **No hardcoded paths** — `make check-hardcoded-paths`
+- [ ] **No network calls** — `make check-network-calls`
+- [ ] **No emojis in source** — `make check-emoji`
+- [ ] **SPDX headers present** — `make check-legal-headers`
+- [ ] **Config schema valid** — `make validate-config`
+- [ ] **Diffstory written** — what changed, why, what was untouched, remaining risks
 
-## Pre-release (Thorough — Run Before Tagging)
+### Gates that must be able to fail
 
-- [ ] **All pre-commit checks pass**
-- [ ] **Integration tests documented** — `tests/integration/README.md` explains PHP 5.6 + arm56 requirement
-- [ ] **README complete** — Install, usage, config, limitations, legal
-- [ ] **INSTALL.md complete** — Prerequisites, arm56 build, PHP 5.6 install
-- [ ] **USAGE.md complete** — All subcommands, options, examples
-- [ ] **CONFIGURATION.md complete** — All config options with defaults
-- [ ] **LEGAL.md reviewed** — No new legal exposure, SPDX headers present
-- [ ] **Version bumped** — `VERSION` file, `__version__` in Python, CLI `--version`
-- [ ] **CHANGELOG updated** — Since last release
-- [ ] **Release artifacts** — Tarball, checksums, signed if possible
-- [ ] **GitHub release drafted** — Notes, assets attached
+Verify a gate is not vacuous before trusting a green run. The historical
+defect in this repo was `which shellcheck && shellcheck X || echo "not
+installed"` — the `||` fired on *any* non-zero exit, so real findings were
+swallowed while the gate printed "All checks passed".
 
-## Code Quality Gates (CI)
+```bash
+# Inject a finding, confirm the gate goes red, then revert.
+cp bin/ioncube-strip /tmp/cli.bak
+printf '\nfoo() {\n  local x=$1\n  echo $x\n}\n' >> bin/ioncube-strip
+make check            # must exit non-zero
+cp /tmp/cli.bak bin/ioncube-strip
+```
 
-| Gate | Command | Blocker? |
-|------|---------|----------|
-| Python syntax | `python -m py_compile lib/*.py` | Yes |
-| Python lint | `ruff check lib/ tests/` | Yes |
-| Python types | `mypy lib/` (if configured) | No |
-| PHP syntax | `php -l lib/*.php` | Yes |
-| Shell syntax | `bash -n bin/ioncube-strip` | Yes |
-| Shell lint | `shellcheck bin/ioncube-strip` | Yes |
-| Unit tests | `python -m pytest tests/unit -v` | Yes |
-| Config validation | `python -c "import yaml, sys; yaml.safe_load(sys.stdin)" < config/ioncube-strip.yaml.example` | Yes |
-| No hardcoded paths | Custom script | Yes |
-| No network calls | Custom script | Yes |
+Note that `set -euo pipefail` at the top of `bin/ioncube-strip` suppresses
+SC2164, so a `cd` probe will look like a pass. Use an unquoted expansion
+(SC2086) instead.
 
-## Documentation Gates
+## Pre-release (run before tagging)
 
-| Gate | Check | Blocker? |
-|------|-------|----------|
-| README exists | `test -f README.md` | Yes |
-| All CLI commands documented | `grep -c "## " USAGE.md` >= 4 | Yes |
-| Config options documented | All YAML keys in CONFIGURATION.md | Yes |
-| Legal notice present | `test -f LEGAL.md` | Yes |
-| SPDX headers in all source | `head -5 lib/*.py lib/*.php bin/* | grep -c SPDX` == total files | Yes |
+- [ ] All pre-commit checks pass
+- [ ] `docs/LEGAL.md` reviewed — it asserts what is and is not included, and
+      that statement is now false in one place whenever arm56 changes
+- [ ] README, INSTALL, USAGE, CONFIGURATION consistent with the code
+- [ ] Version bumped in `bin/ioncube-strip` (`VERSION=`), the single source of
+      truth. There is no `VERSION` file and no `__version__` in the Python
+      modules; do not add a checklist item for either
+- [ ] `docs/ROADMAP.md` statuses reconciled against the tree, not against intent
+- [ ] `aes/kanban.md` current state updated
+- [ ] `tests/integration/README.md` still describes the tiers accurately
+- [ ] Integration tier run with the toolchain **if one is available** — and if
+      it was not, say so in the release notes rather than implying a pass
+- [ ] Release artifacts: tarball, checksums
+- [ ] `make release` then `make verify-release`
 
-## Security Gates
+## What CI cannot check
 
-| Gate | Check | Blocker? |
-|------|-------|----------|
-| No secrets in repo | `git-secrets --scan` (if available) | Yes |
-| No eval/exec in Python | `grep -r "eval\|exec\|subprocess.*shell=True" lib/` | Yes |
-| No shell injection | `grep -r '\$\(' bin/ | grep -v '\$\('` | Yes |
-| Path traversal safe | `grep -r '\.\./' lib/ bin/` | Yes |
+Stated so nobody reads a green CI badge as more than it is:
+
+| Not checked in CI | Why | Where it is checked instead |
+|---|---|---|
+| PHP 5.6 syntax floor | `php -l` on 8.x accepts 7.0+ syntax | `tests/unit/test_php56_syntax.py` (runs in CI) |
+| Python 3.9+ API use | ruff reports no rule for it at `target-version = py38` | `tests/unit/test_python_floor.py` (runs in CI) |
+| Extraction against real input | needs PHP 5.6, the Loader, and a corpus none of which may be committed | `tests/integration/test_extraction.py`, run manually |
+| arm56 build from `arm56/` | needs PHP 5.6 headers | `docs/INSTALL.md`, manual |
+| The legacy pool path end to end | needs the legacy extension | `docs/ROADMAP.md` T017 |
+
+The first two *are* checked in CI, by tests rather than by linters. The last
+three are genuine gaps.

@@ -2,10 +2,11 @@
 """
 collect_dumps.py — Collect arm56 output files and mirror to output directory.
 
-Usage: python3 collect_dumps.py --source <source-root> --file <encrypted-file> --output <output-root> [--arm56-tmp /tmp/arm56_output]
+Usage: python3 collect_dumps.py --source <source-root> --file <encrypted-file> --output <output-root> [--arm56-tmp DIR]
 
-After dump_one.php executes a file, arm56 writes dumps to ARM56_TMP.
-This script finds those dumps and copies them to output-root/dumps/<rel-path>.fn.*
+After dump_one.php executes a file, the legacy arm56 writes dumps to the
+directory named by toolchain.arm56_tmp. This script finds those dumps and
+copies them to output-root/dumps/<rel-path>.fn.*
 
 SPDX-License-Identifier: MIT
 """
@@ -21,6 +22,25 @@ import yaml
 def load_config(config_path):
     with open(config_path, encoding='utf-8') as fh:
         return yaml.safe_load(fh)
+
+
+def default_arm56_tmp():
+    """The arm56 output directory, from the bundled config.
+
+    Not a literal path: CLAUDE.md forbids hardcoding the arm56 tmp directory,
+    and a literal here would also ignore a user who changed the config.
+    """
+    example = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'config', 'ioncube-strip.yaml.example')
+    if not os.path.isfile(example):
+        return ''
+    try:
+        with open(example, encoding='utf-8') as fh:
+            cfg = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return ''
+    return (cfg.get('toolchain', {}) or {}).get('arm56_tmp', '')
 
 
 def collect_dumps(source_root, encrypted_file, output_root, arm56_tmp):
@@ -75,7 +95,7 @@ def main():
     ap.add_argument('--source', required=True, help='Source root directory')
     ap.add_argument('--file', required=True, help='Encrypted file that was dumped')
     ap.add_argument('--output', required=True, help='Output root directory')
-    ap.add_argument('--arm56-tmp', help='arm56 output directory (default: from config or /tmp/arm56_output)')
+    ap.add_argument('--arm56-tmp', help='arm56 output directory (default: toolchain.arm56_tmp from config)')
     ap.add_argument('--config', help='Path to ioncube-strip.yaml config file')
     args = ap.parse_args()
 
@@ -83,8 +103,12 @@ def main():
     if args.config:
         config = load_config(args.config)
 
-    toolchain = config.get('toolchain', {})
-    arm56_tmp = args.arm56_tmp or toolchain.get('arm56_tmp', '/tmp/arm56_output')
+    toolchain = config.get('toolchain', {}) or {}
+    arm56_tmp = args.arm56_tmp or toolchain.get('arm56_tmp') or default_arm56_tmp()
+    if not arm56_tmp:
+        print("No arm56 output directory configured; set toolchain.arm56_tmp",
+              file=sys.stderr)
+        sys.exit(1)
 
     success = collect_dumps(args.source, args.file, args.output, arm56_tmp)
     if not success:

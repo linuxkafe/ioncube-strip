@@ -90,7 +90,10 @@ def discover_functions(dumps_root):
             continue
         fn_part = parts[1]
         func_name = fn_part.split('_0x')[0]
-        func_name = func_name.removesuffix('.txt')
+        # Not str.removesuffix: the documented floor is Python 3.8 and that
+        # landed in 3.9. A dump named foo_0x1234.txt must still resolve to foo.
+        if func_name.endswith('.txt'):
+            func_name = func_name[:-len('.txt')]
         func_files.setdefault(func_name, []).append(f)
     return func_files
 
