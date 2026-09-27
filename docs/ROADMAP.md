@@ -15,7 +15,7 @@ Statuses are reconciled against the tree, not against intent. A ticket is
 | T006 | Configuration file schema (YAML) + validation | high | done | S |
 | T007 | Unit tests for pool extraction (synthetic dumps) | high | done | M |
 | T008 | Integration test harness (two tiers: tool-free + toolchain/corpus) | medium | done | L |
-| T009 | CI pipeline: lint, test, build | high | pending | M |
+| T009 | CI pipeline: lint, test, build | high | partial | M |
 | T010 | Documentation: README, INSTALL, USAGE, CONFIGURATION, LEGAL | high | done | M |
 | T011 | Reflection class manifests (`class_manifest.py` + `manifest`) | high | done | M |
 | T012 | arm56 symbol dumps (`dump_batch.py` + `symbols`) | high | done | M |
@@ -23,6 +23,8 @@ Statuses are reconciled against the tree, not against intent. A ticket is
 | T014 | arm56 v4 extension vendored as first-party source | high | done | M |
 | T015 | Honest quality gates: shellcheck, PHP 5.6 floor, Python 3.8 floor | high | done | M |
 | T016 | arm56 generation probe + CLI guards against the wrong generation | high | done | S |
+| T019 | Verbose/progress logging | medium | done | S |
+| T022 | Release packaging: tarball + SHA-256, built from `git archive` | medium | done | S |
 
 ## Open — the pool premise
 
@@ -57,8 +59,8 @@ neither of which belongs in this repository.
 | T019 | Verbose/progress logging — `--verbose` is parsed by every subcommand and currently does nothing | medium | stub | S |
 | T020 | Error handling improvements (continue on failure) | medium | done | S |
 | T021 | Man page generation | low | pending | S |
-| T022 | Release packaging (tarball, checksums) | medium | pending | S |
-| T023 | GitHub Actions: lint + unit + tool-free integration on a matrix | medium | pending | M |
+| T023 | GitHub Actions: lint + unit + tool-free integration | medium | done | M |
+| T030 | `make format` normalization: 21 files disagree with `ruff format` | low | pending | S |
 
 ## Sprint 3 — Extended Features (Post-1.0)
 
@@ -70,6 +72,17 @@ neither of which belongs in this repository.
 | T027 | Homebrew formula / AUR package | low | backlog | S |
 | T028 | Web-based pool browser (optional) | low | backlog | XL |
 | T029 | Return types in manifests (needs PHP 7 Reflection; unreachable at the 5.6 floor) | low | wontfix | S |
+
+## Newly discovered (not yet scheduled)
+
+Found while fixing the gates, after the tickets above were marked done. Listed
+so they are not mistaken for oversights.
+
+| ID | Title | Status |
+|----|-------|--------|
+| T031 | `--dry-run` requires a working toolchain. Defensible either way: it tells you the toolchain is broken, but it also means a dry run cannot preview on a machine without PHP 5.6. Needs a decision, not a fix. | open |
+| T032 | T009 is only *partial*: the CI workflow lints and tests but never builds `arm56/`, which needs PHP 5.6 headers no runner has. | open |
+| T033 | Python 3.8 has been EOL since Oct 2024 and is claimed in four places. Code honours the claim; whether the claim should stand is an owner decision. | open |
 
 ## Backlog (Unscheduled)
 

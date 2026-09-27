@@ -91,3 +91,7 @@ arm56/depcomp
 arm56/compile
 arm56/phpize.m4
 arm56/*.a
+
+# Release artifacts (produced by `make release`)
+*.tar.gz
+*.sha256

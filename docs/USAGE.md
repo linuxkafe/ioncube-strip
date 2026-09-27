@@ -28,10 +28,25 @@ have no output to produce at all.
 | Option | Description |
 |--------|-------------|
 | `--config FILE` | Configuration file (default: `config/ioncube-strip.yaml.example`) |
-| `--dry-run` | Show commands without executing |
-| `--verbose` | Verbose output |
+| `--dry-run` | Print the commands that would run and execute nothing. Creates no output |
+| `--verbose` | Report the resolved configuration and the counts behind the run on **stderr** |
 | `--help` | Show help for command |
 | `--version` | Show version |
+
+`--verbose` writes to stderr, so `scan --output list --verbose` still gives you
+a clean file list on stdout. It exists because every subcommand accepts it: a
+flag that silently does nothing is worse than no flag, since it advertises a
+diagnostic you cannot get.
+
+What `--verbose` adds per stage:
+
+| Stage | Reports |
+|---|---|
+| `scan` | the source and config in use, and how many paths were written |
+| `dump` | resolved `PHP56` / `PHP56_INI` / `ARM56_SO`, the arm56 generation, and the number of dump files produced |
+| `pool` | the dumps and output directories, and the number of pool files written |
+| `manifest` | resolved toolchain, target count, `jobs`, `rounds`, `timeout` |
+| `symbols` | as `manifest`, plus the arm56 generation warning |
 
 ## Environment Variables
 

@@ -16,3 +16,11 @@ src = ["lib", "tests", "scripts"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/integration"]
+
+[tool.ruff.format]
+# The codebase is consistently single-quoted; ruff's default is double. Without
+# this, `make format` rewrites all 21 files in a style the project never chose,
+# which is churn that buries real diffs. The formatter is NOT enforced — see
+# G14 in docs/QUALITY_GATES.md — so this only makes the tool agree with the
+# code rather than proposing a rewrite.
+quote-style = "single"

@@ -22,25 +22,54 @@ are now separate steps.
 | G2 | PHP parses | `php -l lib/dump_one.php` | `make lint`, CI |
 | G3 | Shell lint | `shellcheck bin/ioncube-strip` | `make lint`, CI |
 | G4 | Unit tests | `python3 -m pytest tests/unit` | `make check`, CI |
-| G5 | Tool-free integration tests | `python3 -m pytest tests/integration` | CI |
-| G6 | No hardcoded paths | `make check-hardcoded-paths` | CI |
-| G7 | No network calls | `make check-network-calls` | CI |
-| G8 | No emojis | `make check-emoji` | CI |
-| G9 | SPDX headers | `make check-legal-headers` | CI |
-| G10 | Config schema | `make validate-config` | CI |
+| G5 | Tool-free integration tests | `python3 -m pytest tests/integration` | `make test-integration`, CI |
+| G6 | No hardcoded paths | `make check-hardcoded-paths` | via `make check`, CI |
+| G7 | No network calls | `make check-network-calls` | via `make check`, CI |
+| G8 | No emojis | `make check-emoji` | via `make check`, CI |
+| G9 | SPDX headers | `make check-legal-headers` | via `make check`, CI |
+| G10 | Config schema | `make validate-config` | via `make check`, CI |
 | G11 | **PHP 5.6 syntax floor** | `pytest tests/unit/test_php56_syntax.py` | via G4, CI |
 | G12 | **Python 3.8 API floor** | `pytest tests/unit/test_python_floor.py` | via G4, CI |
 | G13 | **arm56 generation classification** | `pytest tests/unit/test_probe_arm56.py` | via G4, CI |
+| G14 | No tracked binary or build artifact | `make check-no-binaries` | via `make check`, CI |
+| G15 | CLI flag forwarding and `--verbose` | `pytest tests/integration/test_cli.py` | via G5, CI |
+| G16 | Release artifact integrity | `make release && make verify-release` | manual, pre-release only |
 
-`make check` covers G1-G5. G6-G10 run as separate targets so a policy failure
-is distinguishable from a lint failure; CI runs all of them.
+`make check` is the single gate: `lint`, `test`, `check-no-binaries` and
+`check-policy` (which aggregates G6-G10). G6-G10 also run as individual targets
+so CI can attribute a failure to a specific policy.
+
+### G14 exists because `release` ships the tracked file set
+
+`make release` uses `git archive`, so the artifact is exactly what is committed.
+That makes the tracked set the thing that must be free of binaries:
+`.gitignore` keeps untracked build output out, but nothing stopped
+`git add -f arm56/modules/arm56.so`, and a compiled extension in a release is
+both a legal problem (`docs/LEGAL.md`) and a `CLAUDE.md` "Never-Do".
+
+The previous release target used `tar -czf .` over the working tree, which
+shipped 112 files where git tracked 50 — including `arm56/modules/arm56.so` and
+`arm56/.libs/arm56.so`. A deny-list can never be complete; `git archive` hands
+the job to `.gitignore`.
+
+### G16: verify the checksum, not just the listing
+
+`make verify-release` checks the SHA-256 before listing contents, and warns
+loudly if the `.sha256` file is missing rather than passing silently. A listing
+proves only that `tar` can read the file; the digest is what proves the artifact
+is the one published. Verified by appending a byte to the tarball: the check
+reports `FAILED`.
+
+Note that `tar` and `gzip` embed mtimes and uid/gid, so rebuilding yields a
+different digest. A published checksum is meaningful only next to the exact
+artifact it was taken from — which is why `release` refuses to build from a
+modified working tree and `release-dirty` exists as a knowingly-different path.
 
 ## Warnings
 
 | ID | Check | Note |
 |----|-------|------|
-| G14 | `ruff format --check lib/ tests/ scripts/` | Not a blocker. `make format` rewrites in place. |
-| G15 | `bash -n bin/ioncube-strip` | Subsumed by G3. |
+| G17 | `ruff format --check lib/ tests/ scripts/` | **Not clean: 21 of 22 files disagree.** Deliberately not applied — see T030. `make format` currently rewrites 21 files, so run it as its own reviewed commit, never mixed into a change |
 
 ## Why the floors are tests and not linters
 

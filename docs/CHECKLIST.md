@@ -21,6 +21,7 @@ Or individually:
 - [ ] **No network calls** — `make check-network-calls`
 - [ ] **No emojis in source** — `make check-emoji`
 - [ ] **SPDX headers present** — `make check-legal-headers`
+- [ ] **No tracked binaries or build artifacts** — `make check-no-binaries`
 - [ ] **Config schema valid** — `make validate-config`
 - [ ] **Diffstory written** — what changed, why, what was untouched, remaining risks
 
@@ -57,8 +58,12 @@ SC2164, so a `cd` probe will look like a pass. Use an unquoted expansion
 - [ ] `tests/integration/README.md` still describes the tiers accurately
 - [ ] Integration tier run with the toolchain **if one is available** — and if
       it was not, say so in the release notes rather than implying a pass
-- [ ] Release artifacts: tarball, checksums
-- [ ] `make release` then `make verify-release`
+- [ ] Release artifacts: `make release`, then `make verify-release` — which
+      checks the SHA-256 before listing contents, and warns if the `.sha256`
+      is missing rather than passing silently
+- [ ] Confirmed the tarball has no `.so`, no `aes/`, no `.git/` — `make
+      verify-release` asserts this, and `make check-no-binaries` asserts it of
+      the tracked set, which is what `release` ships
 
 ## What CI cannot check
 

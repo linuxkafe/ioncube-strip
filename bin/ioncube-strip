@@ -74,6 +74,29 @@ check_toolchain_php() {
     [[ $missing -eq 0 ]] || exit 2
 }
 
+# Emit an explanatory line only when --verbose was given.
+#
+# Every subcommand accepts --verbose, so a flag that silently does nothing is
+# worse than no flag: it advertises a diagnostic the user cannot get. These
+# helpers are the only place verbose output is produced.
+verbose() {
+    # Not `[[ ... ]] && printf ... || true`: that is A && B || C, which runs the
+    # true-branch's failure path. An if.
+    if [[ $VERBOSE -eq 1 ]]; then
+        printf '[verbose] %s\n' "$*" >&2
+    fi
+}
+
+# Report the resolved toolchain. Worth showing because config and environment
+# both feed it and a wrong path here is the usual cause of an empty result.
+verbose_toolchain() {
+    [[ $VERBOSE -eq 1 ]] || return 0
+    printf '[verbose] PHP56=%s\n' "$PHP56" >&2
+    printf '[verbose] PHP56_INI=%s\n' "$PHP56_INI" >&2
+    [[ -n "${ARM56_SO:-}" ]] && printf '[verbose] ARM56_SO=%s\n' "$ARM56_SO" >&2
+    return 0
+}
+
 # Identify the arm56 generation that is actually loaded.
 #
 # The two generations are not interchangeable and neither fails loudly when fed
@@ -90,7 +113,7 @@ probe_generation() {
 
 # Subcommand: scan
 cmd_scan() {
-    local source="" output="" config="" dry_run=0 verbose=0
+    local source="" output="" config="" dry_run=0 VERBOSE=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -98,7 +121,7 @@ cmd_scan() {
             --output) output="$2"; shift 2;;
             --config) config="$2"; shift 2;;
             --dry-run) dry_run=1; shift;;
-            --verbose) verbose=1; shift;;
+            --verbose) VERBOSE=1; shift;;
             *) echo "Unknown option: $1" >&2; exit 1;;
         esac
     done
@@ -107,6 +130,7 @@ cmd_scan() {
     [[ -d "$source" ]] || { echo "ERROR: Source not a directory: $source" >&2; exit 1; }
 
     config="$(load_config "${config:-$DEFAULT_CONFIG}")"
+    verbose "scanning $source with markers from $config"
 
     if [[ $dry_run -eq 1 ]]; then
         echo "[DRY-RUN] python3 $LIB_DIR/find_encrypted.py --config $config $source"
@@ -117,6 +141,7 @@ cmd_scan() {
     # successful tee whenever the pipe closed early, duplicating the output.
     if [[ -n "$output" ]]; then
         python3 "$LIB_DIR/find_encrypted.py" --config "$config" "$source" | tee "$output"
+        verbose "wrote $(wc -l <"$output") path(s) to $output"
     else
         python3 "$LIB_DIR/find_encrypted.py" --config "$config" "$source"
     fi
@@ -124,7 +149,7 @@ cmd_scan() {
 
 # Subcommand: dump
 cmd_dump() {
-    local source="" output="" config="" jobs=1 dry_run=0 verbose=0
+    local source="" output="" config="" jobs=1 dry_run=0 VERBOSE=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -133,7 +158,7 @@ cmd_dump() {
             --config) config="$2"; shift 2;;
             --jobs) jobs="$2"; shift 2;;
             --dry-run) dry_run=1; shift;;
-            --verbose) verbose=1; shift;;
+            --verbose) VERBOSE=1; shift;;
             *) echo "Unknown option: $1" >&2; exit 1;;
         esac
     done
@@ -144,6 +169,8 @@ cmd_dump() {
 
     config="$(load_config "${config:-$DEFAULT_CONFIG}")"
     resolve_toolchain "$config"
+    verbose_toolchain
+    verbose "arm56 generation: $(probe_generation "$config" || echo unconfigured)"
     check_toolchain
 
     case "$(probe_generation "$config")" in
@@ -202,11 +229,14 @@ cmd_dump() {
     done
 
     echo "Dump phase complete"
+    # "no dumps collected" is the same output whether the extension was wrong or
+    # the file was genuinely empty, so say which files produced nothing.
+    verbose "$(find "$output/dumps" -type f 2>/dev/null | wc -l) dump file(s) under $output/dumps"
 }
 
 # Subcommand: pool
 cmd_pool() {
-    local dumps="" output="" config="" dry_run=0 verbose=0
+    local dumps="" output="" config="" dry_run=0 VERBOSE=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -214,7 +244,7 @@ cmd_pool() {
             --output) output="$2"; shift 2;;
             --config) config="$2"; shift 2;;
             --dry-run) dry_run=1; shift;;
-            --verbose) verbose=1; shift;;
+            --verbose) VERBOSE=1; shift;;
             *) echo "Unknown option: $1" >&2; exit 1;;
         esac
     done
@@ -224,6 +254,7 @@ cmd_pool() {
     [[ -d "$dumps" ]] || { echo "ERROR: Dumps directory not found: $dumps" >&2; exit 1; }
 
     config="$(load_config "${config:-$DEFAULT_CONFIG}")"
+    verbose "extracting pools from $dumps into $output"
 
     if [[ $dry_run -eq 1 ]]; then
         echo "[DRY-RUN] python3 $LIB_DIR/extract_pools.py --dumps $dumps --output $output --config $config"
@@ -231,6 +262,7 @@ cmd_pool() {
     fi
 
     python3 "$LIB_DIR/extract_pools.py" --dumps "$dumps" --output "$output" --config "$config"
+    verbose "$(find "$output/pools" -name '*.txt' 2>/dev/null | wc -l) pool file(s) under $output/pools"
 }
 
 # Subcommand: manifest
@@ -241,7 +273,7 @@ cmd_pool() {
 # required: nothing here reads the literal buffer.
 cmd_manifest() {
     local files="" source="" output="" config="" jobs=4 rounds=8 limit=""
-    local timeout=30 dry_run=0 verbose=0
+    local timeout=30 dry_run=0 VERBOSE=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -254,7 +286,7 @@ cmd_manifest() {
             --limit) limit="$2"; shift 2;;
             --timeout) timeout="$2"; shift 2;;
             --dry-run) dry_run=1; shift;;
-            --verbose) verbose=1; shift;;
+            --verbose) VERBOSE=1; shift;;
             *) echo "Unknown option: $1" >&2; exit 1;;
         esac
     done
@@ -278,6 +310,8 @@ cmd_manifest() {
     fi
 
     resolve_toolchain "$config"
+    verbose_toolchain
+    verbose "targets: $(wc -l <"$files"), jobs: $jobs, rounds: $rounds, timeout: ${timeout}s"
     check_toolchain_php
     mkdir -p "$output"
     "${cmd[@]}"
@@ -289,7 +323,7 @@ cmd_manifest() {
 # registers for each target, with arm56 loaded.
 cmd_symbols() {
     local files="" source="" output="" config="" jobs=4 rounds=6 limit=""
-    local timeout=30 dry_run=0 verbose=0
+    local timeout=30 dry_run=0 VERBOSE=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -302,7 +336,7 @@ cmd_symbols() {
             --limit) limit="$2"; shift 2;;
             --timeout) timeout="$2"; shift 2;;
             --dry-run) dry_run=1; shift;;
-            --verbose) verbose=1; shift;;
+            --verbose) VERBOSE=1; shift;;
             *) echo "Unknown option: $1" >&2; exit 1;;
         esac
     done
@@ -326,6 +360,8 @@ cmd_symbols() {
     fi
 
     resolve_toolchain "$config"
+    verbose_toolchain
+    verbose "targets: $(wc -l <"$files"), jobs: $jobs, rounds: $rounds, timeout: ${timeout}s"
     check_toolchain
 
     if [[ "$(probe_generation "$config")" == "unverified" ]]; then
@@ -340,7 +376,7 @@ cmd_symbols() {
 
 # Subcommand: run (full pipeline)
 cmd_run() {
-    local source="" output="" config="" jobs=1 dry_run=0 verbose=0
+    local source="" output="" config="" jobs=1 dry_run=0 VERBOSE=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -349,7 +385,7 @@ cmd_run() {
             --config) config="$2"; shift 2;;
             --jobs) jobs="$2"; shift 2;;
             --dry-run) dry_run=1; shift;;
-            --verbose) verbose=1; shift;;
+            --verbose) VERBOSE=1; shift;;
             *) echo "Unknown option: $1" >&2; exit 1;;
         esac
     done
@@ -357,9 +393,26 @@ cmd_run() {
     [[ -n "$source" ]] || { echo "ERROR: --source required" >&2; exit 1; }
     [[ -n "$output" ]] || { echo "ERROR: --output required" >&2; exit 1; }
 
-    cmd_scan --source "$source" --output "$output/scan.list" --config "$config" ${dry_run:+--dry-run} ${verbose:+--verbose}
-    cmd_dump --source "$source" --output "$output" --config "$config" --jobs "$jobs" ${dry_run:+--dry-run} ${verbose:+--verbose}
-    cmd_pool --dumps "$output/dumps" --output "$output" --config "$config" ${dry_run:+--dry-run} ${verbose:+--verbose}
+    # Not ${dry_run:+--dry-run}: that expands whenever the variable is *set*,
+    # and dry_run is set to 0 when the flag is absent, so `run` put every stage
+    # into dry-run mode even when the user never asked. Test the value.
+    #
+    # The ${arr[@]+"${arr[@]}"} form is the portable way to expand a possibly
+    # empty array under `set -u`; mapfile below already requires bash 4.0.
+    # The output root must exist before scan writes $output/scan.list into it.
+    # This was invisible while the dry-run bug above kept every stage from
+    # running: tee failed with "No such file or directory" and nothing noticed.
+    # Not created on a dry run, matching the invariant the other subcommands
+    # already have a test for: --dry-run creates nothing.
+    [[ $dry_run -eq 1 ]] || mkdir -p "$output"
+
+    local -a extra=()
+    [[ $dry_run -eq 1 ]] && extra+=(--dry-run)
+    [[ $VERBOSE -eq 1 ]] && extra+=(--verbose)
+
+    cmd_scan --source "$source" --output "$output/scan.list" --config "$config" ${extra[@]+"${extra[@]}"}
+    cmd_dump --source "$source" --output "$output" --config "$config" --jobs "$jobs" ${extra[@]+"${extra[@]}"}
+    cmd_pool --dumps "$output/dumps" --output "$output" --config "$config" ${extra[@]+"${extra[@]}"}
 
     echo "Pipeline complete. Pools in $output/pools/"
 }
@@ -386,8 +439,8 @@ docs/CONFIGURATION.md, "Two arm56 generations".
 
 Global Options:
   --config FILE     Configuration file (default: config/ioncube-strip.yaml.example)
-  --dry-run         Show commands without executing
-  --verbose         Verbose output
+  --dry-run         Print the commands that would run; create nothing
+  --verbose         Report resolved config and counts on stderr
   --help            Show this help
   --version         Show version
 
