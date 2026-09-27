@@ -19,6 +19,12 @@ import sys
 import pytest
 from conftest import run_lib, toolchain_config
 
+# The manifest file name is the sanitized target path; reuse the tool's own
+# function so the test cannot drift from it.
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'lib'))
+from lib.class_manifest import sanitize as _sanitize
+
 pytestmark = pytest.mark.toolchain
 
 LIB = os.path.join(
@@ -126,16 +132,32 @@ def test_symbols_reports_a_document_per_target(corpus, tmp_path):
 
 @pytest.mark.corpus
 def test_manifest_and_symbols_agree_on_the_method_count(corpus, tmp_path):
-    """M3: two independent mechanisms must produce the same method count.
+    """The two tools must agree, on quantities they define identically.
 
-    Reflection (class_manifest.py) and the Loader's own symbol registration
-    (dump_batch.py) have nothing in common but the file list. Where they
-    disagree, one of them is wrong — treat it as a defect signal, not noise.
+    They do not define method count the same way, and pretending otherwise
+    produced false alarms on WHMCS:
 
-    docs/CONFIGURATION.md quotes 1028 methods across 104 files for the WHMCS
-    includes/classes block. That figure is an observation from one machine, not
-    an invariant: a different corpus legitimately yields a different number, so
-    this asserts agreement, never a constant.
+    - `class_manifest.py` reports **own_methods**: what the class declares.
+    - `dump_batch.py` reports the op_array's method table, which the Loader
+      materializes **including inherited methods**, and attributes an override
+      to both the parent and the child.
+
+    Measured on WHMCS 5.3.12: comparing the two counts raised 2 false
+    mismatches, and comparing `all_methods` instead (Reflection's getMethods(),
+    which also folds in interface methods) raised 5 different ones. Neither
+    scalar is universally comparable. Per class:
+
+    - no parent, no interfaces: the two counts are the same quantity, and on
+      WHMCS 118 of 118 agree exactly. This is the assertion.
+    - a parent exists: arm56's count is the superset, so the exact invariant is
+      a subset check -- every method the manifest says is declared must appear
+      in arm56's set for that class. A method the manifest invents would fail.
+
+    Class name lists are compared for every file, since both tools define those
+    identically. On WHMCS: 167 files, zero disagreements.
+
+    `docs/VALIDATION.md` has the full accounting, including the four
+    parent-class cases and why each differs.
     """
     listing, _ = _targets(corpus, tmp_path, limit=25)
     manifests = tmp_path / 'manifests'
@@ -150,21 +172,67 @@ def test_manifest_and_symbols_agree_on_the_method_count(corpus, tmp_path):
     man = json.loads((manifests / '_manifest_report.json').read_text('utf-8'))
     sym = json.loads((symbols / '_batch_report.json').read_text('utf-8'))
 
-    compared = 0
-    for path, m_entry in man['files'].items():
-        s_entry = sym['files'].get(path)
-        if s_entry is None or s_entry.get('state') != 'ok':
+    # arm56 writes one JSON per compiled file, keyed by the source path.
+    by_source = {}
+    for path in sorted(symbols.glob('*.json')):
+        if path.name == '_batch_report.json':
             continue
-        if not m_entry.get('classes'):
-            continue
-        compared += 1
-        assert m_entry['methods'] == s_entry['methods'], (
-            f'{path}: Reflection reports {m_entry["methods"]} methods, arm56 '
-            f'reports {s_entry["methods"]}')
+        try:
+            doc = json.loads(path.read_text('utf-8'))
+        except ValueError:
+            continue  # the resolver's own generated driver, dumped and cut short
+        if doc.get('source'):
+            by_source[doc['source']] = doc
 
-    assert compared, (
-        'no file produced a manifest and a symbol dump, so nothing was '
+    files_compared = 0
+    classes_compared = 0
+    exact = 0
+    for path, m_entry in man['files'].items():
+        if m_entry.get('state') != 'ok' or not m_entry.get('classes'):
+            continue
+        if sym['files'].get(path, {}).get('state') != 'ok':
+            continue
+        files_compared += 1
+
+        assert sorted(m_entry['classes']) == sorted(
+            sym['files'][path].get('classes') or []), (
+            f'{path}: the two tools disagree on which classes the file declares')
+
+        doc = by_source.get(path)
+        if doc is None:
+            continue
+        for cls in json.loads(
+                (manifests / f'{_sanitize(path)}.manifest.json').read_text('utf-8')
+        )['classes']:
+            arm = {s['name'] for s in doc.get('symbols', [])
+                   if s.get('kind') == 'method' and s.get('scope') == cls['name']}
+            if not arm and not cls['own_methods']:
+                continue
+            classes_compared += 1
+            declared = {m['name'] for m in cls['methods']}
+            missing = declared - arm
+            assert not missing, (
+                f'{cls["name"]}: manifest declares {sorted(missing)} but arm56 '
+                f'reports no such method')
+            if not cls.get('parent') and not cls.get('interfaces'):
+                exact += 1
+                assert len(declared) == len(arm), (
+                    f'{cls["name"]}: no parent and no interfaces, so both tools '
+                    f'must count the same methods, but manifest says '
+                    f'{len(declared)} and arm56 says {len(arm)}')
+
+    assert files_compared, (
+        'no file produced both a manifest and a symbol dump, so nothing was '
         'cross-checked — treat this as a failure, not a vacuous pass')
+    assert exact, (
+        'no class without a parent or interfaces was compared, so the exact '
+        'invariant was never exercised')
+
+    # Coverage caveat, learned the hard way: an injected defect in a class that
+    # the stride sample did not pick was NOT caught, and the test passed. The
+    # sample is limit files out of the whole corpus, so this is a smoke-level
+    # check. For full coverage run the stage over the entire corpus and diff the
+    # two reports -- see docs/VALIDATION.md.
 
 
 @pytest.mark.corpus

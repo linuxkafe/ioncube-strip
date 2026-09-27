@@ -81,7 +81,7 @@ The pool premise is now settled by evidence rather than inference. See
 
 | ID | Title | Priority | Status | Effort |
 |----|-------|----------|--------|--------|
-| T024 | Reconstruction stub generator (reads manifests → emits PHP skeletons) | medium | backlog | L |
+| T024 | Reconstruction stub generator (reads manifests → emits PHP skeletons) | high | ready | M |
 | T025 | Multiple ionCube version detection (heuristic) | low | backlog | L |
 | T026 | Docker image with PHP 5.6 + arm56 v4 prebuilt | medium | backlog | M |
 | T027 | Homebrew formula / AUR package | low | backlog | S |
@@ -98,6 +98,25 @@ so they are not mistaken for oversights.
 | T031 | `--dry-run` requires a working toolchain. Defensible either way: it tells you the toolchain is broken, but it also means a dry run cannot preview on a machine without PHP 5.6. Needs a decision, not a fix. | open |
 | T032 | T009 is only *partial*: the CI workflow lints and tests but never builds `arm56/`, which needs PHP 5.6 headers no runner has. | open |
 | T033 | Python 3.8 has been EOL since Oct 2024 and is claimed in four places. Code honours the claim; whether the claim should stand is an owner decision. | open |
+
+### T024 is now ready, and its fidelity is measured
+
+A generator was written as a validation harness and is not in the repository.
+Measured on WHMCS: **162 of 162 classes generate a skeleton that Reflection
+reports as identical to the encrypted original** — parent, interfaces,
+abstract, final, constants, own properties, own method signatures. 143/143
+files parse and load under PHP 5.6.
+
+Reclassified from `backlog`/`L` to `ready`/`M`: the hard part (mapping manifests
+onto valid PHP 5.6 declarations) is solved and the remaining work is product
+decisions, not research. Two need an owner:
+
+1. **Empty bodies or throwing bodies?** Empty bodies produce a map. A body of
+   `throw new \RuntimeException('not implemented')` produces something that
+   loads and runs, which is a large practical difference.
+2. **Licensing of emitted code.** Skeletons derived from WHMCS are derived work
+   from proprietary source. `docs/LEGAL.md` covers the tool; it says nothing
+   about output.
 
 ## Backlog (Unscheduled)
 

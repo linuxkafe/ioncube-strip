@@ -106,6 +106,96 @@ class shape to recover. The 94 + 60 are admin/API entry points that cannot load
 without a database. **Neither category is a class-definition file**, which is
 what this method can read.
 
+## Does the conversion succeed?
+
+Short answer: **the class-shape conversion succeeds completely; the behavioural
+conversion does not happen at all.** Both halves were measured.
+
+### What "conversion" can mean here
+
+The tool emits JSON, not PHP. No converter exists in the tree — the
+reconstruction stub generator is backlog item T024. To answer the question
+rather than dodge it, a generator was written as a **validation harness**
+(it is not in the repository) that reads the manifests and emits PHP class
+skeletons, and the output was checked three ways.
+
+### Fidelity: 100%, verified by reflection
+
+For every class, the encrypted original and the generated skeleton were
+reflected in separate PHP 5.6 processes and the facts diffed: parent, interface
+list, abstract, final, constants, own properties, and own method signatures
+(name, visibility, static, abstract, final, parameter names).
+
+| | Count |
+|---|---|
+| Classes compared | 162 |
+| **Identical** | **162** |
+| Differing | **0** |
+
+Not a single difference. The generated declarations are indistinguishable from
+the encrypted originals to Reflection.
+
+Loadability was checked separately: 143/143 skeleton files parse under PHP 5.6
+and 143/143 load, declaring all 162 classes, with 49 stub pre-declarations
+supplying parents that live in other files.
+
+### Three defects the harness found — in the harness
+
+Worth recording, because each looked like a data defect and was not:
+
+1. `ReflectionClass::isAbstract()` is **true for every interface**, so
+   `abstract` was emitted for interfaces and produced `interface abstract X`.
+2. Modifier order: `abstract` must precede the kind. Emitting `class abstract X`
+   is a parse error.
+3. An **abstract class still has concrete methods that need bodies**. Only
+   methods declared `abstract` may omit one. The manifest's per-method
+   `abstract` flag is what makes this decidable — a real payoff of the
+   manifest's fidelity.
+
+Before those fixes, 32 of 143 skeletons failed to parse. The recovered data was
+correct throughout; the generator was wrong.
+
+### The honest ratio
+
+| | |
+|---|---|
+| Encrypted PHP in the corpus | 7,167,567 bytes across 516 files |
+| All PHP in the corpus | 17,467,369 bytes across 961 files |
+| Classes recovered | 162 |
+| Method declarations recovered | 1,437 |
+| Property declarations | 550 |
+| Constant declarations | 104 |
+| **Skeleton PHP produced** | **7,526 lines** |
+| **Method bodies recovered** | **0** |
+
+That is the whole story in one table. The declarations are roughly a tenth of
+one percent of the encrypted bytes, and they are *exactly* right. The other
+99.9% — every conditional, query, loop, calculation and side effect — is
+absent, and `docs/VALIDATION.md` above shows arm56's own output says it is
+absent from the runtime, not merely inaccessible to us.
+
+So: **the conversion succeeds at declarations and fails completely at
+behaviour, and no amount of further work on this toolchain changes the second
+half.** Anyone planning a recovery needs to know that up front. What the output
+buys is a correct map of the API — the class graph, every signature, every
+constant — which is genuinely the hardest and most error-prone part of
+reconstructing a 5-year-old codebase, and which hand-inspection of 516
+encrypted files would not produce at all.
+
+### What is not yet decided
+
+Whether to promote the validation harness into the repository as the T024 stub
+generator. It is small, and its fidelity is now measured rather than assumed.
+Before that, two questions need an owner's answer:
+
+- **Bodies.** A skeleton with empty bodies is a map, not a program. A generator
+  that emitted a `throw new \RuntimeException('not implemented')` body would be
+  *runnable* and much more useful, but that is a design decision, not a
+  formatting one.
+- **Licensing of output.** Generated skeletons are derived from WHMCS, which is
+  proprietary. The generator is a tool; what it emits may not be freely
+  distributed. `docs/LEGAL.md` covers the tool, not the output.
+
 ## Reproducing
 
 ```bash
