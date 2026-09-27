@@ -27,10 +27,19 @@ load_config() {
 # Resolve toolchain paths from config + env
 resolve_toolchain() {
     local config_file="$1"
-    PHP56="${PHP56:-}"
-    PHP56_INI="${PHP56_INI:-}"
-    ARM56_SO="${ARM56_SO:-}"
-    ARM56_TMP="${ARM56_TMP:-}"
+
+    # Precedence is environment, then config, then the compiled-in fallback —
+    # the same order lib/dump_batch.py:resolve_toolchain documents. Capture the
+    # environment BEFORE the config is evaluated: the eval below assigns
+    # unconditionally, so without this the config would clobber the exported
+    # variables and the documented "env overrides config" would be backwards.
+    local env_php56="${PHP56:-}" env_ini="${PHP56_INI:-}"
+    local env_arm56="${ARM56_SO:-}" env_tmp="${ARM56_TMP:-}"
+    local env_extra="${PHP56_EXTRA:-}"
+
+    # Initialised here so the `export` below cannot trip `set -u` when neither
+    # the environment nor the config mentions it.
+    PHP56_EXTRA="$env_extra"
 
     if [[ -f "$config_file" ]]; then
         # Use Python to parse YAML and export vars
@@ -45,13 +54,20 @@ for k, v in tc.items():
 ")"
     fi
 
+    # Re-assert the environment over the config values.
+    PHP56="${env_php56:-$PHP56}"
+    PHP56_INI="${env_ini:-$PHP56_INI}"
+    ARM56_SO="${env_arm56:-$ARM56_SO}"
+    ARM56_TMP="${env_tmp:-$ARM56_TMP}"
+    PHP56_EXTRA="${env_extra:-$PHP56_EXTRA}"
+
     # Env vars override config
     PHP56="${PHP56:-/usr/local/bin/php5.6}"
     PHP56_INI="${PHP56_INI:-/etc/php56/php.ini}"
     ARM56_SO="${ARM56_SO:-/usr/local/lib/arm56.so}"
     ARM56_TMP="${ARM56_TMP:-/tmp/arm56_output}"
 
-    export PHP56 PHP56_INI ARM56_SO ARM56_TMP
+    export PHP56 PHP56_INI ARM56_SO ARM56_TMP PHP56_EXTRA
 }
 
 # Check toolchain availability
@@ -273,7 +289,7 @@ cmd_pool() {
 # required: nothing here reads the literal buffer.
 cmd_manifest() {
     local files="" source="" output="" config="" jobs=4 rounds=8 limit=""
-    local timeout=30 dry_run=0 VERBOSE=0
+    local timeout=30 quiet=0 dry_run=0 VERBOSE=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -285,6 +301,7 @@ cmd_manifest() {
             --rounds) rounds="$2"; shift 2;;
             --limit) limit="$2"; shift 2;;
             --timeout) timeout="$2"; shift 2;;
+            --quiet) quiet=1; shift;;
             --dry-run) dry_run=1; shift;;
             --verbose) VERBOSE=1; shift;;
             *) echo "Unknown option: $1" >&2; exit 1;;
@@ -303,6 +320,7 @@ cmd_manifest() {
     [[ -n "$source" ]] && cmd+=(--source "$source")
     [[ -n "$limit" ]] && cmd+=(--limit "$limit")
     [[ "$config" != "$DEFAULT_CONFIG" ]] && cmd+=(--config "$config")
+    [[ $quiet -eq 1 ]] && cmd+=(--quiet)
 
     if [[ $dry_run -eq 1 ]]; then
         echo "[DRY-RUN] ${cmd[*]}"
@@ -466,6 +484,7 @@ Manifest / Symbols Options:
   --rounds N        Max dependency-resolution rounds (default: 8 / 6)
   --limit N         Process at most N files
   --timeout N       Per-file timeout in seconds (default: 30)
+  --quiet           Suppress the summary (manifest only)
 
 Run Options:
   --source DIR      Source directory (required)

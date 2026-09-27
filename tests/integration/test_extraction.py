@@ -17,7 +17,7 @@ import os
 import sys
 
 import pytest
-from conftest import run_lib
+from conftest import run_lib, toolchain_config
 
 pytestmark = pytest.mark.toolchain
 
@@ -37,16 +37,20 @@ def test_php56_is_actually_56(php_argv):
     assert proc.stdout.strip() == '5.6', f'expected PHP 5.6, got {proc.stdout}'
 
 
-def test_arm56_loads_as_a_zend_extension(php_argv, arm56_so):
+def test_arm56_loads_as_a_plain_extension(php_argv, arm56_so):
+    # extension=, not zend_extension=: arm56.c:950 declares a plain
+    # zend_module_entry with STANDARD_MODULE_HEADER. Loaded as a zend_extension
+    # it reports "doesn't appear to be a valid Zend extension" and every
+    # arm56_* function is absent -- a wrong answer, not an error.
     from conftest import run
-    proc = run([*php_argv, '-d', f'zend_extension={arm56_so}', '-m'])
+    proc = run([*php_argv, '-d', f'extension={arm56_so}', '-m'])
     assert proc.returncode == 0, proc.stderr
     assert 'arm56' in proc.stdout, proc.stdout
 
 
 def test_arm56_dump_is_callable(php_argv, arm56_so):
     from conftest import run
-    proc = run([*php_argv, '-d', f'zend_extension={arm56_so}', '-r',
+    proc = run([*php_argv, '-d', f'extension={arm56_so}', '-r',
                 'echo function_exists("arm56_dump") ? "yes" : "no";'])
     assert proc.stdout.strip() == 'yes', proc.stdout
 
@@ -61,7 +65,7 @@ def test_extension_is_inert_without_arm56_json(php_argv, arm56_so, tmp_path):
     script.write_text('echo "loaded\\n";', encoding='utf-8')
     env = dict(os.environ)
     env.pop('ARM56_JSON', None)
-    proc = run([*php_argv, '-d', f'zend_extension={arm56_so}', str(script)],
+    proc = run([*php_argv, '-d', f'extension={arm56_so}', str(script)],
                check=False)
     assert proc.returncode == 0, proc.stderr
     assert list(out.iterdir()) == []
@@ -70,15 +74,24 @@ def test_extension_is_inert_without_arm56_json(php_argv, arm56_so, tmp_path):
 # -- corpus --------------------------------------------------------------
 
 def _targets(corpus, tmp_path, limit=None):
-    """Write the corpus file list in the form the batch tools expect."""
+    """Write the corpus file list in the form the batch tools expect.
+
+    Sampled with a stride rather than taking the first N alphabetically. An
+    alphabetical prefix of a real tree is almost always route or bootstrap
+    files (`admin/*.php`), which cannot load without the live application, so
+    the cross-check would find nothing to compare and rightly fail. Pointing
+    IONCUBE_STRIP_CORPUS at a class directory such as `includes/classes` gives
+    the highest yield; the stride keeps the sample spread either way.
+    """
     found = []
     for dirpath, _, filenames in os.walk(corpus):
         for name in sorted(filenames):
             if name.endswith('.php'):
                 found.append(os.path.join(dirpath, name))
     found.sort()
-    if limit:
-        found = found[:limit]
+    if limit and len(found) > limit:
+        stride = max(1, len(found) // limit)
+        found = found[::stride][:limit]
     listing = tmp_path / 'targets.list'
     listing.write_text('\n'.join(found) + '\n', encoding='utf-8')
     return listing, found
@@ -88,7 +101,8 @@ def _targets(corpus, tmp_path, limit=None):
 def test_manifest_reports_shape_for_every_target(corpus, tmp_path):
     listing, targets = _targets(corpus, tmp_path, limit=5)
     out = tmp_path / 'manifests'
-    run_lib('class_manifest.py', '--files', str(listing), '--output', str(out))
+    run_lib('class_manifest.py', '--files', str(listing), '--output', str(out),
+            '--config', toolchain_config(tmp_path))
 
     report = json.loads((out / '_manifest_report.json').read_text(encoding='utf-8'))
     assert set(report['files']) == set(targets)
@@ -103,7 +117,7 @@ def test_symbols_reports_a_document_per_target(corpus, tmp_path):
     listing, targets = _targets(corpus, tmp_path, limit=5)
     out = tmp_path / 'symbols'
     proc = run_lib('dump_batch.py', '--files', str(listing), '--output', str(out),
-                   check=False)
+                   '--config', toolchain_config(tmp_path), check=False)
     assert proc.returncode == 0, proc.stderr
 
     report = json.loads((out / '_batch_report.json').read_text(encoding='utf-8'))
@@ -127,8 +141,11 @@ def test_manifest_and_symbols_agree_on_the_method_count(corpus, tmp_path):
     manifests = tmp_path / 'manifests'
     symbols = tmp_path / 'symbols'
 
-    run_lib('class_manifest.py', '--files', str(listing), '--output', str(manifests))
-    run_lib('dump_batch.py', '--files', str(listing), '--output', str(symbols))
+    cfg = toolchain_config(tmp_path)
+    run_lib('class_manifest.py', '--files', str(listing), '--output', str(manifests),
+            '--config', cfg)
+    run_lib('dump_batch.py', '--files', str(listing), '--output', str(symbols),
+            '--config', cfg)
 
     man = json.loads((manifests / '_manifest_report.json').read_text('utf-8'))
     sym = json.loads((symbols / '_batch_report.json').read_text('utf-8'))
@@ -157,7 +174,8 @@ def test_reports_are_valid_json_under_a_non_ascii_path(corpus, tmp_path):
     # the mapping between target and result.
     listing, _ = _targets(corpus, tmp_path, limit=2)
     out = tmp_path / 'manifests'
-    run_lib('class_manifest.py', '--files', str(listing), '--output', str(out))
+    run_lib('class_manifest.py', '--files', str(listing), '--output', str(out),
+            '--config', toolchain_config(tmp_path))
     report = json.loads((out / '_manifest_report.json').read_text(encoding='utf-8'))
     assert isinstance(report['files'], dict)
 

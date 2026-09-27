@@ -119,13 +119,19 @@ python3 lib/probe_arm56.py --config config/ioncube-strip.yaml.example
 
 # Check the extension loads
 /usr/local/php56/bin/php -c /etc/php56/php.ini \
-  -d zend_extension=/usr/local/lib/arm56.so -m | grep arm56
+  -d extension=/usr/local/lib/arm56.so -m | grep arm56
 # Should show: arm56
 ```
 
-`zend_extension=`, not `extension=`: arm56 wraps `zend_compile_file` and must be
-loaded after the ionCube Loader, which must itself be the first
-`zend_extension` in `php.ini` or it aborts.
+`extension=`, not `zend_extension=`: arm56 declares a plain
+`zend_module_entry` with `STANDARD_MODULE_HEADER` and `PHP_MINIT`
+(`arm56/arm56.c:950`), so it is an ordinary extension. Loading it as a
+`zend_extension` fails with *"doesn't appear to be a valid Zend extension"* and
+`arm56_version()` is then absent — which the probe would report as
+`unverified`, i.e. a wrong answer rather than an error.
+
+Ordering still matters, and it is the *Loader* that must come first, not arm56:
+the Loader aborts unless it is the first `zend_extension` in `php.ini`.
 
 ### legacy source
 
@@ -221,8 +227,11 @@ make check
   `docs/CONFIGURATION.md`.
 
 ### "The Loader must appear as the first entry in the php.ini file"
-- The ionCube Loader must be the first `zend_extension` in `php56_ini`, and
-  arm56 must come after it. Reorder `php.ini`; do not add `extension=`.
+- The ionCube Loader must be the first `zend_extension` in `php56_ini`. arm56
+  itself is a plain `extension=`, loaded after the Loader. Reorder `php.ini`
+  accordingly, and note that a distro php.ini loading opcache as a
+  `zend_extension` will conflict — use a dedicated ini, which is what
+  `PHP_INI_SCAN_DIR=''` in the tool supports.
 
 ### "Permission denied on /tmp/arm56_output"
 - Ensure directory exists and is writable

@@ -44,12 +44,28 @@ design. The code is kept and tested, and the CLI refuses to run `dump` against
 a v4 extension rather than reporting a silent empty success, but no claim is
 made that it works.
 
+## Settled by measurement
+
+The pool premise is now settled by evidence rather than inference. See
+`docs/VALIDATION.md`.
+
+- **T017 — settled against the pool path.** arm56's own output on WHMCS shows
+  `content_faulted: true` and `num_ops: 0` for every encoded method, and
+  `num_literals` as a count rather than content. There is no literal buffer to
+  extract; this is not an implementation limitation. `dump`/`pool`/`run` stay
+  in the tree, tested and labelled legacy, but no page advertises them as a
+  capability.
+- **Class shape is validated.** 90/90 class-bearing files, 1028 methods, two
+  independent mechanisms agreeing exactly, under a second on four jobs.
+- **Doc comments survive encryption** — 32.6% of symbols, 288 `@return` tags,
+  24 distinct `@param` types. Undocumented in the requirements until now; it
+  is real recovery value and belongs in the product description.
+- **v1.0.0 is no longer blocked on T017.** The premise was decided; the
+  product is `manifest` and `symbols`.
+
 | ID | Title | Priority | Status | Effort |
 |----|-------|----------|--------|--------|
-| T017 | Settle the pool premise: run `dump`/`pool` against a legacy build on a real corpus, or retire them | high | blocked | M |
-
-T017 is blocked on external inputs (a legacy arm56 build and a real corpus),
-neither of which belongs in this repository.
+| T034 | Diagnose the 15 PHP 5.6 parse errors and 7 other fatals in the corpus | low | backlog | S |
 
 ## Sprint 2 — Polish & Distribution
 
@@ -93,9 +109,12 @@ so they are not mistaken for oversights.
 
 ## Milestones
 
-1. **v0.1.0** — Core pipeline on a WHMCS test corpus (shipped)
+1. **v0.1.0** — Core pipeline on a WHMCS test corpus (shipped). Its premise was
+   later disproved; see "Settled by measurement"
 2. **v0.2.0** — Class shape extraction: `manifest` + `symbols`, generation probe,
    honest gates, integration suite *(current)*
-3. **v0.5.0** — CI passing, packaging, man pages
-4. **v1.0.0** — Stable API, release artifacts, legal review. **Blocked on T017**:
-   the product's headline capability must be decided before a 1.0 claim.
+3. **v0.3.0** — Validated on WHMCS: 90/90 class files, 1028 methods, cross-check
+   clean. Toolchain-present test tier running in CI where a toolchain exists
+4. **v0.5.0** — CI on a PHP 5.6 runner, man pages, packaging
+5. **v1.0.0** — Stable API, release artifacts, legal review. Not blocked: the
+   product's scope was settled by measurement, and it is class shape

@@ -52,6 +52,33 @@ def run_lib(script, *args, **kwargs):
     return run([sys.executable, os.path.join(LIB, script), *args], **kwargs)
 
 
+def toolchain_config(tmp_path):
+    """A config file describing the toolchain, for the lib/ tools.
+
+    The lib/ tools take their paths from `toolchain:` in a config file (or the
+    PHP56 / PHP56_INI / ARM56_SO environment variables). The fixtures are named
+    IONCUBE_STRIP_* to keep them out of that namespace, so without this the
+    tests would set a toolchain the tools never see -- which is exactly what
+    happened until the tests were first run against a real PHP 5.6.
+
+    Passing an explicit config also exercises the config path, rather than
+    relying on whatever the developer's shell happens to export.
+    """
+    php = os.environ.get('IONCUBE_STRIP_PHP56', '')
+    ini = os.environ.get('IONCUBE_STRIP_INI', '')
+    arm56 = os.environ.get('IONCUBE_STRIP_ARM56', '')
+    if not (php and ini):
+        return None
+    path = tmp_path / 'toolchain.yaml'
+    path.write_text(
+        'toolchain:\n'
+        f'  php56: "{php}"\n'
+        f'  php56_ini: "{ini}"\n'
+        f'  arm56_so: "{arm56}"\n',
+        encoding='utf-8')
+    return str(path)
+
+
 def _env(name):
     value = os.environ.get(name, '')
     return value if value and os.path.exists(value) else ''

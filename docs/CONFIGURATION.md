@@ -266,13 +266,21 @@ is tracked as such in `docs/ROADMAP.md`.
 
 ### Cross-check
 
-On the WHMCS `includes/classes` block both tools reported **1028 methods across
-104 files** on one machine, from independent mechanisms.
+On WHMCS 5.3.12, `includes/classes`: 90 encrypted files, **88 classes, 1028
+methods, 260 properties, 32 constants**, every file resolved, in under one
+second on four jobs. The arm56 path independently reports **1028 methods with
+zero mismatches** across the same 90 files.
 
-That figure is an observation, not an invariant: it is a property of that
-corpus, not of the tools, and a different corpus will legitimately yield a
-different number. The claim worth asserting — and the one
+Reflection and arm56 share nothing but the file list — one reads what the
+Loader resolved for inheritance, the other reads the op_arrays the Loader
+registered — so their agreement is evidence rather than coincidence.
+
+That figure is an observation about that corpus, not an invariant of the tools:
+a different corpus legitimately yields a different total. The claim worth
+asserting, and the one
 `tests/integration/test_extraction.py::test_manifest_and_symbols_agree_on_the_method_count`
-asserts — is that the two mechanisms *agree* on whatever corpus is supplied.
-A disagreement means one of the two is wrong; treat it as a defect signal
-rather than noise.
+asserts, is that the two mechanisms *agree* on whatever corpus is supplied. A
+disagreement means one of them is wrong; treat it as a defect signal rather
+than noise.
+
+Measured end to end in `docs/VALIDATION.md`.

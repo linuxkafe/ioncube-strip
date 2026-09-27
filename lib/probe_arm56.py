@@ -50,7 +50,7 @@ PROBE_PHP = (
 
 def probe(php, ini, arm56_so, timeout=15):
     """Return the generation classification for the loaded extension."""
-    cmd = [php, '-c', ini, '-d', f'zend_extension={arm56_so}', '-r', PROBE_PHP]
+    cmd = [php, '-c', ini, '-d', f'extension={arm56_so}', '-r', PROBE_PHP]
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=timeout,
                               check=False)

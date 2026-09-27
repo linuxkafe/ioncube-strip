@@ -47,6 +47,27 @@ The `IONCUBE_STRIP_` prefix is deliberate: it keeps these out of the
 `PHP56` / `ARM56_SO` namespace that `lib/dump_batch.py` reads, so a test run
 cannot silently pick up a developer's shell configuration.
 
+Because of that separation the tests cannot simply export `PHP56` — the lib
+tools would not see them. `conftest.toolchain_config()` writes a temporary
+`ioncube-strip.yaml` from the fixtures and passes it with `--config`, which
+also exercises the config path rather than trusting the developer's shell.
+
+**arm56 loads with `extension=`, not `zend_extension=`.** It declares a plain
+`zend_module_entry` (`arm56/arm56.c:950`). Loading it as a zend_extension
+reports *"doesn't appear to be a valid Zend extension"* and every `arm56_*`
+function is then absent — a wrong answer rather than an error, which is why
+both the probe and these tests got it wrong until they were first run against a
+real PHP 5.6.
+
+**Point `IONCUBE_STRIP_CORPUS` at a class directory** such as
+`includes/classes`. A whole application tree is dominated by bootstrap-
+dependent route files that cannot load without a live install, so yield drops.
+Targets are sampled with a stride, because an alphabetical prefix of a real
+tree is almost always `admin/*.php`.
+
+Measured on WHMCS 5.3.12 with all four variables set: **76 passed, 0 skipped**
+across the whole suite. See `docs/VALIDATION.md`.
+
 ## Why there is no committed corpus
 
 A fixture containing ionCube-encoded third-party PHP is a legal liability, and
