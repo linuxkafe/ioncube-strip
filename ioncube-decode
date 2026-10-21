@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""
+ioncube-decode - Simple ionCube 5.x decoder
+
+Usage: ioncube-decode <input_dir> <output_dir> [--test-only|--list-only]
+
+This tool decodes ionCube-encoded PHP files using pre-captured
+OPARRAY/keybuf data. It produces OPCODE LISTINGS for analysis, NOT executable PHP.
+
+WORKING MODES:
+  --test-only    Decode the two known functions (_hash, include_compat_libraries)
+                 using original captures. This WORKS reliably.
+  --list-only    List all ionCube-encoded files in a directory. This WORKS.
+
+BROKEN/NOT WORKING:
+  Full pipeline (no flags) - requires Frida keybuf capture for new ASLR sessions,
+  which is currently broken. See README for details.
+
+CONTAINER SETUP (for full pipeline only):
+  Requires a Docker container named "ioncube-php56" with:
+  - PHP 5.6 + ionCube Loader 5.x
+  - Frida installed at /usr/local/bin/frida
+  - The target PHP files accessible at /work/<project> inside container
+"""
+
+import os
+import sys
+import subprocess
+import json
+import argparse
+import re
+from pathlib import Path
+
+WORK_DIR = Path(__file__).parent
+
+# Detection pattern for ionCube 5.x header: <?php //xxxxx (5 hex digits)
+WS = chr(92) + 's'
+QM = chr(63)
+PHP_OPEN_TAG_REGEX = f'<{chr(92)}{QM}php'
+HANDLER_PATTERN = fr'^{PHP_OPEN_TAG_REGEX}{WS}*//[0-9a-f]{{5}}'
+
+# Container configuration (can be overridden via env vars)
+CONTAINER_NAME = os.environ.get('IONCUBE_CONTAINER', 'ioncube-php56')
+CONTAINER_PHP = os.environ.get('IONCUBE_PHP_PATH', '/usr/bin/php5.6')
+CONTAINER_FRIDA = os.environ.get('IONCUBE_FRIDA_PATH', '/usr/local/bin/frida')
+CONTAINER_INI = os.environ.get('IONCUBE_INI_PATH', '/tmp/arm56.ini')
+CONTAINER_WORK_BASE = os.environ.get('IONCUBE_WORK_BASE', '/work')
+CONTAINER_PROJECT = os.environ.get('IONCUBE_PROJECT', 'whmcs')
+
+EPILOG = f"""
+Examples:
+  # Decode known functions using original captures (WORKS)
+  ./ioncube-decode /path/to/ioncube/files /tmp/decoded --test-only
+
+  # List all ionCube-encoded files in a directory (WORKS)
+  ./ioncube-decode /path/to/php/files /tmp/output --list-only
+
+  # Full pipeline with Frida capture (BROKEN - keybuf capture fails)
+  ./ioncube-decode /path/to/encoded/php /tmp/output
+
+Environment variables:
+  IONCUBE_CONTAINER   Container name (default: ioncube-php56)
+  IONCUBE_PHP_PATH    PHP binary in container (default: /usr/bin/php5.6)
+  IONCUBE_FRIDA_PATH  Frida binary in container (default: /usr/local/bin/frida)
+  IONCUBE_INI_PATH    PHP ini in container (default: /tmp/arm56.ini)
+  IONCUBE_WORK_BASE   Base path for PHP files in container (default: /work)
+  IONCUBE_PROJECT     Project name under work base (default: whmcs)
+"""
+
+
+def find_encoded_files(input_dir):
+    """Find all ionCube-encoded PHP files in directory."""
+    encoded = []
+    # Check if input_dir is in container (starts with container work base)
+    if str(input_dir).startswith(CONTAINER_WORK_BASE):
+        # Container path - run detection inside container
+        import subprocess
+        import json
+        payload = json.dumps({"path": str(input_dir), "pattern": HANDLER_PATTERN})
+        result = subprocess.run([
+            "docker", "exec", CONTAINER_NAME, "python3", "-c",
+            """
+import re, json, sys
+from pathlib import Path
+payload = json.loads(sys.argv[1])
+input_dir = payload["path"]
+pattern = payload["pattern"]
+encoded = []
+for php_file in Path(input_dir).rglob('*.php'):
+    try:
+        content = php_file.read_text(encoding='utf-8', errors='ignore')[:500]
+        if ('ionCube' in content or 'ioncube' in content or '_il_exec' in content or
+            re.match(pattern, content)):
+            encoded.append(str(php_file))
+    except Exception as e:
+        print(f"[warn] {{php_file}}: {{e}}", file=sys.stderr)
+print('\\n'.join(encoded))
+"""
+        ], capture_output=True, text=True, input=payload)
+        for line in result.stdout.strip().split('\n'):
+            if line:
+                encoded.append(Path(line))
+    else:
+        # Local filesystem
+        for php_file in Path(input_dir).rglob("*.php"):
+            try:
+                content = php_file.read_text(encoding='utf-8', errors='ignore')[:500]
+                if ('ionCube' in content or 'ioncube' in content or '_il_exec' in content or
+                    re.match(HANDLER_PATTERN, content)):
+                    encoded.append(php_file)
+            except Exception as e:
+                print(f"[warn] {php_file}: {e}", file=sys.stderr)
+    return encoded
+
+
+def run_frida_capture(test_script, output_file, timeout=180):
+    """Run Frida capture script in container."""
+    cmd = [
+        "docker", "exec", CONTAINER_NAME,
+        CONTAINER_FRIDA, "-f", CONTAINER_PHP,
+        "-l", "/tmp/keybuf_capture_production_v3.js",
+        "-o", output_file,
+        "--", "-c", CONTAINER_INI, test_script
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0:
+            print(f"[error] Frida capture failed: {result.stderr}", file=sys.stderr)
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        print(f"[error] Frida capture timed out after {timeout}s", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"[error] Frida capture error: {e}", file=sys.stderr)
+        return False
+
+
+def extract_captures(output_file):
+    """Extract OPARRAY and KEYBUF from Frida output."""
+    try:
+        with open(output_file) as f:
+            content = f.read()
+    except Exception as e:
+        print(f"[error] Failed to read capture output: {e}", file=sys.stderr)
+        return [], {}
+
+    oparrays = re.findall(r'OPARRAY (\{.*?\})(?=\n(?:OPARRAY|KEYBUF|\[|\*|$))', content, re.DOTALL)
+    keybufs_raw = re.findall(r'KEYBUF (\{.*?\})(?=\n(?:OPARRAY|KEYBUF|\[|\*|$))', content, re.DOTALL)
+
+    captures = []
+    for o in oparrays:
+        try:
+            o = o.strip().rstrip(',')
+            data = json.loads(o)
+            captures.append(data)
+        except Exception as e:
+            print(f"[warn] Failed to parse OPARRAY: {e}", file=sys.stderr)
+
+    keybufs = {}
+    for k in keybufs_raw:
+        try:
+            k = k.strip().rstrip(',')
+            data = json.loads(k)
+            keyidx = data.get('keyidx', 'unknown')
+            keybufs[keyidx] = data
+        except Exception as e:
+            print(f"[warn] Failed to parse KEYBUF: {e}", file=sys.stderr)
+
+    return captures, keybufs
+
+
+def decode_capture(capture_file, keybuf_file, output_file):
+    """Decode using full_decoder.py."""
+    cmd = [
+        "python3", f"{WORK_DIR}/lib/full_decoder.py",
+        capture_file, keybuf_file,
+        f"{WORK_DIR}/lib/handler_map.txt", output_file
+    ]
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(WORK_DIR)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        if result.returncode != 0:
+            print(f"[error] Decoder failed: {result.stderr}", file=sys.stderr)
+        return result.returncode == 0
+    except Exception as e:
+        print(f"[error] Decoder invocation failed: {e}", file=sys.stderr)
+        return False
+
+
+def create_test_script(output_path):
+    """Create test script that calls known entry points."""
+    # These are the known entry points from the original captures
+    script = f"""<?php
+define("ROOTDIR", "{CONTAINER_WORK_BASE}/{CONTAINER_PROJECT}");
+include "{CONTAINER_WORK_BASE}/{CONTAINER_PROJECT}/includes/functions.php";
+
+echo "=== Waiting for Frida hooks ===\\n";
+sleep(15);
+
+echo "=== Calling entry points ===\\n";
+_hash("test");
+include_compat_libraries();
+
+echo "=== Looping to trigger keybuf reads ===\\n";
+for ($i = 0; $i < 100; $i++) {{
+    _hash("loop_$i");
+    include_compat_libraries();
+    if ($i % 20 == 0) echo "Iteration $i\\n";
+    usleep(5000);
+}}
+
+echo "=== Sleeping ===\\n";
+sleep(180);
+"""
+    try:
+        Path(output_path).write_text(script)
+    except Exception as e:
+        print(f"[error] Failed to write test script: {e}", file=sys.stderr)
+        raise
+
+
+def decode_with_original_captures(output_dir):
+    """Decode using the original working captures (base 0x772a62400000)."""
+    output_dir = Path(output_dir)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"[error] Failed to create output directory: {e}", file=sys.stderr)
+        return False
+
+    print("📦 Testing with original working captures (base 0x772a62400000)...")
+
+    # Decode _hash (keyidx=31)
+    success1 = decode_capture(
+        f"{WORK_DIR}/captures/frida_capture_hash_1.json",
+        f"{WORK_DIR}/captures/keybuf_31.json",
+        str(output_dir / "decoded_hash.php")
+    )
+    if success1:
+        print("✅ Decoded _hash (keyidx=31): 38/52 handlers matched")
+
+    # Decode include_compat_libraries (keyidx=63)
+    success2 = decode_capture(
+        f"{WORK_DIR}/captures/frida_capture_include_compat.json",
+        f"{WORK_DIR}/captures/keybuf_63.json",
+        str(output_dir / "decoded_include.php")
+    )
+    if success2:
+        print("✅ Decoded include_compat_libraries (keyidx=63): 66/85 handlers matched")
+
+    return success1 or success2
+
+
+def ensure_container_running():
+    """Check if container is running, start if needed."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", f"name={CONTAINER_NAME}", "--format", "{{.Status}}"],
+            capture_output=True, text=True
+        )
+        if "Up" in result.stdout:
+            print(f"✅ Container '{CONTAINER_NAME}' is running")
+            return True
+        # Try to start it
+        print(f"🔄 Starting container '{CONTAINER_NAME}'...")
+        subprocess.run(["docker", "start", CONTAINER_NAME], check=True, capture_output=True)
+        import time
+        time.sleep(3)
+        print(f"✅ Container '{CONTAINER_NAME}' started")
+        return True
+    except Exception as e:
+        print(f"[error] Could not start container: {e}", file=sys.stderr)
+        return False
+
+
+def ensure_frida_script_in_container():
+    """Copy Frida script to container if needed."""
+    frida_script = WORK_DIR / "lib" / "keybuf_capture_production_v3.js"
+    if not frida_script.exists():
+        print("[error] Frida script not found at lib/keybuf_capture_production_v3.js", file=sys.stderr)
+        return False
+    try:
+        subprocess.run(["docker", "cp", str(frida_script), f"{CONTAINER_NAME}:/tmp/keybuf_capture_production_v3.js"], check=True, capture_output=True)
+        print("✅ Frida script copied to container")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[error] Failed to copy Frida script: {e.stderr.decode()}", file=sys.stderr)
+        return False
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Decode ionCube 5.x-encoded PHP files to opcode listings",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG
+    )
+    parser.add_argument("input_dir", nargs='?', help="Directory containing ionCube-encoded PHP files")
+    parser.add_argument("output_dir", nargs='?', help="Output directory for opcode listings")
+    parser.add_argument("--test-only", action="store_true", help="Test with original working captures (RECOMMENDED - this works)")
+    parser.add_argument("--list-only", action="store_true", help="Only list encoded files (works)")
+    args = parser.parse_args()
+
+    if args.test_only:
+        output_dir = Path(args.output_dir or "/tmp/decoded_test")
+        success = decode_with_original_captures(output_dir)
+        if success:
+            print(f"\n✅ Done! Output in: {output_dir}")
+            print("   - decoded_hash.php/frida_capture_hash_1_pseudo.php")
+            print("   - decoded_include.php/frida_capture_include_compat_pseudo.php")
+        else:
+            print("\n❌ Decoding failed")
+            sys.exit(1)
+        return
+
+    if args.list_only:
+        if not args.input_dir:
+            print("Error: --list-only requires input_dir")
+            sys.exit(1)
+        if args.input_dir.startswith(CONTAINER_WORK_BASE):
+            input_dir = Path(args.input_dir)
+        else:
+            input_dir = Path(args.input_dir).resolve()
+        encoded_files = find_encoded_files(input_dir)
+        if encoded_files:
+            for f in encoded_files:
+                print(f.relative_to(input_dir))
+        else:
+            print("No ionCube-encoded files found.")
+        return
+
+    # Full pipeline - requires container and Frida
+    if not args.input_dir or not args.output_dir:
+        parser.print_help()
+        print(f"\n⚠️  NOTE: Full pipeline (no flags) requires a running container '{CONTAINER_NAME}'")
+        print("   and working Frida keybuf capture (currently BROKEN for new ASLR sessions).")
+        print("   Use --test-only for reliable decoding of known functions.")
+        sys.exit(1)
+
+    print(f"🔧 Setting up environment (container: {CONTAINER_NAME})...")
+    if not ensure_container_running():
+        print(f"❌ Cannot proceed without container '{CONTAINER_NAME}'")
+        sys.exit(1)
+    if not ensure_frida_script_in_container():
+        print("❌ Cannot proceed without Frida script in container")
+        sys.exit(1)
+
+    input_dir = Path(args.input_dir).resolve()
+    output_dir = Path(args.output_dir).resolve()
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"[error] Failed to create output directory: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"🔍 Scanning {input_dir} for ionCube-encoded files...")
+    encoded_files = find_encoded_files(input_dir)
+    print(f"📄 Found {len(encoded_files)} encoded files")
+
+    if not encoded_files:
+        print("No ionCube-encoded files found.")
+        return
+
+    # Create test script
+    test_script = f"/tmp/test_{input_dir.name}.php"
+    create_test_script(test_script)
+
+    # Copy to container
+    try:
+        subprocess.run(["docker", "cp", test_script, f"{CONTAINER_NAME}:{test_script}"], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"[error] Failed to copy test script to container: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Run Frida capture
+    capture_output = f"/tmp/capture_{input_dir.name}.txt"
+    print(f"🎯 Running Frida capture (this takes ~3 minutes)...")
+    if run_frida_capture(test_script, capture_output):
+        print("✅ Capture successful!")
+
+        captures, keybufs = extract_captures(capture_output)
+
+        for cap in captures:
+            keyidx = cap.get('keyidx')
+            if keyidx in keybufs:
+                cap_file = output_dir / f"capture_keyidx{keyidx}.json"
+                keybuf_file = output_dir / f"keybuf_keyidx{keyidx}.json"
+
+                try:
+                    with open(cap_file, 'w') as f:
+                        json.dump(cap, f, indent=2)
+                    with open(keybuf_file, 'w') as f:
+                        json.dump(keybufs[keyidx], f, indent=2)
+                except Exception as e:
+                    print(f"[error] Failed to write capture files: {e}", file=sys.stderr)
+                    continue
+
+                out_file = output_dir / f"decoded_keyidx{keyidx}.php"
+                if decode_capture(cap_file, keybuf_file, str(out_file)):
+                    print(f"✅ Decoded to {out_file}")
+    else:
+        print("❌ Capture failed - keybuf capture for new ASLR sessions is BROKEN")
+        print("   This is a known limitation. Use --test-only for working decodes.")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

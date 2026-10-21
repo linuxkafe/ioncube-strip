@@ -1,0 +1,9 @@
+{
+  "source": "REA static analysis of loader binary",
+  "address": "loader+0x37ed38 (Ghidra 0x47ed38)",
+  "entries": 256,
+  "format": "Each entry is 8-byte pointer to keybuf (256 uint32s)",
+  "keyidx_31_ptr": "0x8b0f200000000000",
+  "keyidx_63_ptr": "0xca91f0000000000",
+  "note": "Static binary pointers - runtime values differ due to ASLR. Use Frida to read at runtime."
+}

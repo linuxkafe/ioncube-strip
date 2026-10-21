@@ -1,0 +1,101 @@
+# ionCube Loader Handler → ZEND Opcode Map
+# loader: ioncube_loader_lin_5.6.so (ionCube Loader v15.5)
+# sha256: f30d17662a62997747b6765a580fe29e97971dd36dc6f0f87fdb57a67f0016f8
+#
+# Key = handler offset within the loader (as decoded from opline->handler by:
+#   handler = raw64 ^ sign_extend64( keybuf[i] * 0x01010101 )   where keybuf[i] is
+#   the byte at (*(*(loader+0x37ec68)+0xd0))[keyidx][i], keyidx = *(int*)(reserved3+8)
+#   and the XOR is only applied when (flags[0xa4] & 0x80) is set.
+#
+# Confidence: high / medium / low. See docs/DECRYPTION_STATUS.md for method.
+# Offsets are grouped by semantic family where the inference is shared.
+
+# --- conditional jump / fetch-dispatch family (parameterised wrapper FUN_0018a87c) ---
+0x8b0a0 = ZEND_FETCH_CONSTANT|ZEND_JMPZ_family(mode=0)   # wrapper -> FUN_0018a87c(0,..)
+0x8b08a = ZEND_FETCH_CONSTANT|ZEND_JMPNZ_family(mode=1)  # wrapper -> FUN_0018a87c(1,..)
+0x8b074 = ZEND_FETCH_CONSTANT|JMP_family(mode=2)         # wrapper -> FUN_0018a87c(2,..)
+0x8b05e = ZEND_FETCH_CONSTANT|JMP_family(mode=3)         # wrapper -> FUN_0018a87c(3,..)
+0x8afef = JMP_conditional(cond=computed from CV type bits)
+0x8b0b6 = ZEND_FETCH_CLASS                                # zend_lookup_class_ex
+
+# --- concat family ---
+0x79c3b = ZEND_CONCAT
+0x79ba7 = ZEND_CONCAT
+0x79abd = ZEND_CONCAT
+0x799dc = ZEND_CONCAT
+0x79cb8 = ZEND_CONCAT
+0x77bb2 = ZEND_CONCAT (add_char_to_string)
+0x77b4b = ZEND_CONCAT (add_string_to_string)
+0x77952 = ZEND_CONCAT (with printable conversion)
+
+# --- boolean ---
+0x85a7f = ZEND_BOOL_NOT
+0x85af8 = ZEND_BOOL_NOT
+0x5fba1 = ZEND_BOOL
+0x5fd2a = ZEND_BOOL
+
+# --- comparison ---
+0x81bf9 = ZEND_IS_EQUAL / ZEND_IS_NOT_EQUAL (compare_function)
+
+# --- arithmetic / compound assignment ---
+0xb03a4 = ASSIGN_CONCAT family (helper FUN_001af93a, op=concat_function)
+0xaf87a = ASSIGN_CONCAT family (helper FUN_001aee7f, op=concat_function)
+
+# --- array ---
+0x5f40e = ZEND_INIT_ARRAY
+0x5f2fa = ZEND_INIT_ARRAY (no elements)
+0x5f4b8 = ZEND_INIT_ARRAY + ZEND_ADD_ARRAY_ELEMENT
+0x5f562 = ZEND_INIT_ARRAY + ZEND_ADD_ARRAY_ELEMENT
+0x59bf1 = ZEND_ASSIGN_DIM / ZEND_ADD_ARRAY_ELEMENT
+0x5aa68 = ZEND_ADD_ARRAY_ELEMENT / ZEND_ASSIGN_DIM
+
+# --- foreach ---
+0xbb39e = ZEND_FE_RESET
+0xbe45b = ZEND_FE_RESET
+0xbcc28 = ZEND_FE_RESET
+0xbefd4 = ZEND_FE_RESET
+0xbd00c = ZEND_FE_RESET
+
+# --- object / class ---
+0x6c149 = INIT_STATIC_METHOD_CALL / FETCH_CLASS_CONSTANT family (zend_get_class_entry)
+0xb78dc = ZEND_NEW / object-init family (_object_init)
+0xb6a2f = ZEND_NEW / object-init family (_object_init)
+0xd8180 = exception / catch cleanup (low confidence)
+
+# --- assignment / copy ---
+0xd3afd = ZEND_ASSIGN / ASSIGN_DIM family
+0xd3a49 = ZEND_ASSIGN / ASSIGN_DIM family
+0xd90c6 = ZEND_ASSIGN-ish (low)
+0x4db48 = ZEND_QM_ASSIGN / empty-string init
+
+# --- cast / exit / echo ---
+0x7f745 = ZEND_CAST
+0x72381 = ZEND_EXIT
+0x724a1 = ZEND_EXIT
+0x721da = ZEND_ECHO
+
+# --- no-op ---
+0x4cd84 = ZEND_NOP
+
+# --- include ---
+0xe14b1 = ZEND_INCLUDE_OR_EVAL
+0xe0932 = ZEND_INCLUDE_OR_EVAL
+
+# --- isset/isempty ---
+0x6618d = ZEND_ISSET_ISEMPTY_DIM_OBJ (mode 0)
+
+# --- guards (ionCube verification / fatal-error helpers, not real opcodes) ---
+0x4e215 = GUARD (zend_error(1,..) fatal guard)
+0x4da57 = GUARD (zend_error(1,..) fatal guard)
+0x4d341 = GUARD (zend_error(1,..) fatal guard)
+0xdbd38 = GUARD (arg-related fatal)
+0x4e665 = GUARD/undetermined
+0x5795c = branch/fetch variant (undetermined)
+0xcd973 = string/array element op (undetermined)
+0xcb05d = string/array element op (undetermined)
+0xcb7b0 = string/array element op (undetermined)
+0xb59c7 = version-gated dispatch (undetermined)
+0xd51f2 = object/refcount op (undetermined)
+0x6ee0d = name-resolution handler (undetermined)
+0x88a63 = name/constant lookup (undetermined)
+0xd8180 = exception cleanup (undetermined)
